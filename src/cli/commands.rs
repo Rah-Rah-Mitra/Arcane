@@ -91,12 +91,12 @@ pub fn cmd_chunk(project_name: &str) -> Result<()> {
         .get(project_name)
         .with_context(|| format!("project '{project_name}' not found"))?;
 
-    let chunks_dir = storage::chunks_dir(project_name)?;
-
-    // Use rayon to chunk sources in parallel.
+    // Each source gets its own subdirectory so multiple textbooks don't collide
+    // and the idempotency guard works correctly per-source.
     let results: Vec<Result<()>> = project.sources
         .par_iter()
         .map(|meta| {
+            let chunks_dir = storage::filesystem::source_chunks_dir(project_name, &meta.title)?;
             let source = build_source(meta.clone());
             source.chunk(&chunks_dir)
         })

@@ -49,6 +49,26 @@ pub fn chunks_dir(project_name: &str) -> Result<PathBuf> {
     Ok(dir)
 }
 
+/// Returns `~/Arcane/Library/[project_name]/Chunks/[source_title]` (created on demand).
+///
+/// Each source gets its own subdirectory so multiple textbooks in the same
+/// project don't collide and the idempotency guard works per-source.
+pub fn source_chunks_dir(project_name: &str, source_title: &str) -> Result<PathBuf> {
+    // Sanitise the title for use as a directory name.
+    let safe: String = source_title
+        .chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+            c => c,
+        })
+        .collect();
+    let safe = safe.trim().replace("  ", " ");
+    let dir = chunks_dir(project_name)?.join(safe);
+    fs::create_dir_all(&dir)
+        .with_context(|| format!("failed to create source chunks directory for '{source_title}'"))?;
+    Ok(dir)
+}
+
 // ---------------------------------------------------------------------------
 // Portable home-directory helper (no extra dependency)
 // ---------------------------------------------------------------------------
