@@ -123,6 +123,7 @@ impl Database {
     }
 
     /// Get all source titles for a project (used before deletion to clean up search index).
+    #[allow(dead_code)]
     pub fn get_source_titles(&self, project_name: &str) -> Result<Vec<String>, StorageError> {
         let project_id =
             self.get_project_id(project_name)?

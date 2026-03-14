@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use tantivy::collector::TopDocs;
 use tantivy::query::{BooleanQuery, Occur, QueryParser, TermQuery};
 use tantivy::schema::{IndexRecordOption, Value};
-use tantivy::{Term, TantivyDocument};
+use tantivy::{TantivyDocument, Term};
 
 use super::indexer::{
     SearchIndex, FIELD_BODY, FIELD_CHAPTER, FIELD_PAGE, FIELD_PROJECT, FIELD_SOURCE_ID, FIELD_TITLE,
@@ -59,37 +59,37 @@ pub fn search(
         .with_context(|| format!("failed to parse search query: {query_str}"))?;
 
     // Wrap with optional project/source filters using a BooleanQuery.
-    let query: Box<dyn tantivy::query::Query> =
-        if project_filter.is_some() || source_filter.is_some() {
-            let project_field = index.schema().get_field(FIELD_PROJECT).unwrap();
-            let title_filter_field = index.schema().get_field(FIELD_TITLE).unwrap();
+    let query: Box<dyn tantivy::query::Query> = if project_filter.is_some()
+        || source_filter.is_some()
+    {
+        let project_field = index.schema().get_field(FIELD_PROJECT).unwrap();
+        let title_filter_field = index.schema().get_field(FIELD_TITLE).unwrap();
 
-            let mut clauses: Vec<(Occur, Box<dyn tantivy::query::Query>)> =
-                vec![(Occur::Must, parsed)];
+        let mut clauses: Vec<(Occur, Box<dyn tantivy::query::Query>)> = vec![(Occur::Must, parsed)];
 
-            if let Some(proj) = project_filter {
-                clauses.push((
-                    Occur::Must,
-                    Box::new(TermQuery::new(
-                        Term::from_field_text(project_field, proj),
-                        IndexRecordOption::Basic,
-                    )),
-                ));
-            }
-            if let Some(src) = source_filter {
-                clauses.push((
-                    Occur::Must,
-                    Box::new(TermQuery::new(
-                        Term::from_field_text(title_filter_field, src),
-                        IndexRecordOption::Basic,
-                    )),
-                ));
-            }
+        if let Some(proj) = project_filter {
+            clauses.push((
+                Occur::Must,
+                Box::new(TermQuery::new(
+                    Term::from_field_text(project_field, proj),
+                    IndexRecordOption::Basic,
+                )),
+            ));
+        }
+        if let Some(src) = source_filter {
+            clauses.push((
+                Occur::Must,
+                Box::new(TermQuery::new(
+                    Term::from_field_text(title_filter_field, src),
+                    IndexRecordOption::Basic,
+                )),
+            ));
+        }
 
-            Box::new(BooleanQuery::new(clauses))
-        } else {
-            parsed
-        };
+        Box::new(BooleanQuery::new(clauses))
+    } else {
+        parsed
+    };
 
     let top_docs = searcher
         .search(&*query, &TopDocs::with_limit(limit))

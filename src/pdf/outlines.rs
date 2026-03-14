@@ -48,7 +48,15 @@ pub fn extract_chapters_with_depth(
         .collect();
 
     let mut result = BTreeMap::new();
-    walk_outline_entries(doc, first_ref, &oid_to_page, 1, max_depth, None, &mut result);
+    walk_outline_entries(
+        doc,
+        first_ref,
+        &oid_to_page,
+        1,
+        max_depth,
+        None,
+        &mut result,
+    );
 
     if result.is_empty() {
         bail!("no usable entries in /Outlines");

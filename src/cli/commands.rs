@@ -96,10 +96,7 @@ pub fn cmd_chunk(project_name: &str, force: bool, depth: u32, dry_run: bool) -> 
             println!("Source: {}", meta.title);
             match crate::pdf::engine::detect_boundaries(meta, depth) {
                 Ok(ranges) => {
-                    println!(
-                        "  {:<4} {:<50} {}",
-                        "#", "Chapter", "Pages"
-                    );
+                    println!("  {:<4} {:<50} Pages", "#", "Chapter");
                     println!("  {}", "\u{2500}".repeat(70));
                     for (i, (start, end, title)) in ranges.iter().enumerate() {
                         println!(
@@ -374,10 +371,7 @@ pub fn cmd_outline(path: PathBuf, depth: u32) -> Result<()> {
         Ok(chapters) => {
             let total = doc.get_pages().len() as u32;
             let ranges = crate::pdf::engine::boundaries_to_ranges(&chapters, total);
-            println!(
-                "  {:<4} {:<50} {}",
-                "#", "Title", "Pages"
-            );
+            println!("  {:<4} {:<50} Pages", "#", "Title");
             println!("  {}", "\u{2500}".repeat(70));
             for (i, (start, end, title)) in ranges.iter().enumerate() {
                 println!(
