@@ -1,0 +1,25 @@
+[package]
+name = "arcane"
+version = "0.1.0"
+edition = "2021"
+description = "A local-first research archival application for managing Projects and Sources"
+authors = ["Arcane Contributors"]
+license = "MIT"
+
+[[bin]]
+name = "arcane"
+path = "src/main.rs"
+
+[dependencies]
+# PDF manipulation — extract PageLabels, Outlines, and split documents
+lopdf = "0.39.0"
+
+# Serialisation / deserialisation for projects.json
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Ergonomic error handling
+anyhow = "1.0"
+
+[dev-dependencies]
+tempfile = "3"

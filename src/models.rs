@@ -1,0 +1,251 @@
+//! Domain models for Arcane.
+//!
+//! Defines the [`Project`] schema, the [`Source`] trait that every source type
+//! must implement, and the two concrete source types: [`Textbook`] (needs
+//! chunking) and [`Report`] (no chunking required).
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
+
+// ---------------------------------------------------------------------------
+// Project schema
+// ---------------------------------------------------------------------------
+
+/// A research project groups one or more [`SourceMeta`] entries under a
+/// human-readable name and a set of optional tags.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Project {
+    /// Unique human-readable name (used as the directory name under `~/Arcane/Library/`).
+    pub name: String,
+
+    /// Optional keywords that help with organisation and search.
+    #[serde(default)]
+    pub tags: Vec<String>,
+
+    /// All sources that belong to this project.
+    #[serde(default)]
+    pub sources: Vec<SourceMeta>,
+}
+
+impl Project {
+    /// Create a new, empty project.
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            tags: Vec::new(),
+            sources: Vec::new(),
+        }
+    }
+
+    /// Add a source to the project and return a mutable reference to it.
+    pub fn add_source(&mut self, meta: SourceMeta) {
+        self.sources.push(meta);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Source metadata (persisted)
+// ---------------------------------------------------------------------------
+
+/// Serialisable record stored inside `projects.json` for each source.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SourceMeta {
+    /// Display name / title of the source.
+    pub title: String,
+
+    /// Absolute path to the original PDF file.
+    pub path: PathBuf,
+
+    /// `true` when this source is a large document that should be split into
+    /// per-chapter PDFs; `false` for cheat-sheets, reports, etc.
+    pub needs_chunking: bool,
+
+    /// Maps **physical** (0-based) page indices to logical chapter names.
+    ///
+    /// Example: `{0: "Front Matter", 12: "Chapter 1 — Introduction", …}`
+    #[serde(default)]
+    pub chapter_map: HashMap<u32, String>,
+
+    /// When `chapter_map` is empty and `needs_chunking` is `true`, the user
+    /// may supply the physical page index where printed page 1 starts.  This
+    /// allows the engine to compute `offset = physical - logical`.
+    #[serde(default)]
+    pub start_page_physical: Option<u32>,
+}
+
+impl SourceMeta {
+    /// Convenience constructor for a source that does **not** require chunking.
+    pub fn report(title: impl Into<String>, path: PathBuf) -> Self {
+        Self {
+            title: title.into(),
+            path,
+            needs_chunking: false,
+            chapter_map: HashMap::new(),
+            start_page_physical: None,
+        }
+    }
+
+    /// Convenience constructor for a source that **does** require chunking.
+    pub fn textbook(
+        title: impl Into<String>,
+        path: PathBuf,
+        chapter_map: HashMap<u32, String>,
+        start_page_physical: Option<u32>,
+    ) -> Self {
+        Self {
+            title: title.into(),
+            path,
+            needs_chunking: true,
+            chapter_map,
+            start_page_physical,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Source trait
+// ---------------------------------------------------------------------------
+
+/// Behaviour that every source type must implement.
+pub trait Source {
+    /// Split the source into per-chapter PDFs inside `chunks_dir`.
+    ///
+    /// Implementations are **idempotent**: if the chunks directory is already
+    /// populated they should return early without re-processing.
+    fn chunk(&self, chunks_dir: &std::path::Path) -> Result<()>;
+
+    /// Placeholder for future YouTube transcript / video-lecture integration.
+    #[allow(dead_code)]
+    #[allow(unused_variables)]
+    fn youtube(&self, url: &str) -> Result<()> {
+        anyhow::bail!("YouTube integration is not yet implemented for this source type")
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Textbook — implements chunking
+// ---------------------------------------------------------------------------
+
+/// A large PDF (textbook / lecture notes) that should be split into individual
+/// chapter files.
+pub struct Textbook {
+    pub meta: SourceMeta,
+}
+
+impl Textbook {
+    pub fn new(meta: SourceMeta) -> Self {
+        Self { meta }
+    }
+}
+
+impl Source for Textbook {
+    fn chunk(&self, chunks_dir: &std::path::Path) -> Result<()> {
+        crate::pdf_engine::chunk_pdf(&self.meta, chunks_dir)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Report — skips chunking
+// ---------------------------------------------------------------------------
+
+/// A short document (report, cheat-sheet, paper) that is stored as-is without
+/// being split.
+pub struct Report {
+    pub meta: SourceMeta,
+}
+
+impl Report {
+    pub fn new(meta: SourceMeta) -> Self {
+        Self { meta }
+    }
+}
+
+impl Source for Report {
+    fn chunk(&self, _chunks_dir: &std::path::Path) -> Result<()> {
+        println!(
+            "[arcane] '{}' is a Report — chunking is not required.",
+            self.meta.title
+        );
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Factory helper
+// ---------------------------------------------------------------------------
+
+/// Build the correct [`Source`] implementation from a [`SourceMeta`] record.
+pub fn build_source(meta: SourceMeta) -> Box<dyn Source> {
+    if meta.needs_chunking {
+        Box::new(Textbook::new(meta))
+    } else {
+        Box::new(Report::new(meta))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn project_add_source() {
+        let mut p = Project::new("Algorithms");
+        p.tags.push("cs".into());
+        assert_eq!(p.sources.len(), 0);
+
+        let meta = SourceMeta::report("CLRS", PathBuf::from("/tmp/clrs.pdf"));
+        p.add_source(meta);
+        assert_eq!(p.sources.len(), 1);
+        assert!(!p.sources[0].needs_chunking);
+    }
+
+    #[test]
+    fn textbook_meta_needs_chunking() {
+        let meta = SourceMeta::textbook(
+            "SICP",
+            PathBuf::from("/tmp/sicp.pdf"),
+            HashMap::new(),
+            Some(10),
+        );
+        assert!(meta.needs_chunking);
+        assert_eq!(meta.start_page_physical, Some(10));
+    }
+
+    #[test]
+    fn build_source_dispatch() {
+        let report_meta = SourceMeta::report("Notes", PathBuf::from("/tmp/notes.pdf"));
+        let source = build_source(report_meta);
+        // Report::chunk should succeed without touching the filesystem
+        let result = source.chunk(std::path::Path::new("/tmp"));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn source_meta_serialise_round_trip() {
+        let mut chapters = HashMap::new();
+        chapters.insert(0u32, "Front Matter".to_string());
+        chapters.insert(12u32, "Chapter 1".to_string());
+
+        let meta = SourceMeta::textbook(
+            "Test Book",
+            PathBuf::from("/tmp/book.pdf"),
+            chapters.clone(),
+            Some(5),
+        );
+
+        let json = serde_json::to_string(&meta).expect("serialise");
+        let back: SourceMeta = serde_json::from_str(&json).expect("deserialise");
+
+        assert_eq!(back.title, "Test Book");
+        assert_eq!(back.chapter_map.len(), chapters.len());
+        assert_eq!(back.start_page_physical, Some(5));
+    }
+}
