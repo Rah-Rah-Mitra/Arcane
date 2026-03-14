@@ -4,6 +4,7 @@
 //! resolution, structural operations, text extraction, and helpers.
 
 pub mod engine;
+pub mod heuristics;
 pub mod ops;
 pub mod outlines;
 pub mod page_labels;

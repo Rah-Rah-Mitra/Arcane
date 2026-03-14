@@ -328,6 +328,41 @@ Page labels:
   Page 19 — Content (arabic)
 ```
 
+### `arcane recover-outline <file> [options]`
+
+Re-hydrates the outline (bookmarks) of a PDF that has no `/Outlines` and no `/PageLabels` by analysing font sizes in the content streams. Useful for LaTeX-generated textbooks whose metadata was stripped.
+
+**Options:**
+- `--output PATH`: Write the fixed PDF to a new file instead of overwriting the input
+- `--dry-run`: Preview detected headings without writing anything
+- `--min-font-ratio R`: Font-size multiplier above body text to classify as a heading (default: 1.2 = 20 % larger)
+- `--depth N`: Maximum heading depth to inject (1 = chapter-level only, 2 = chapters + sections; default: 2)
+
+**Workflow:**
+```bash
+# 1. Confirm the PDF has no outlines
+arcane outline "book.pdf"
+
+# 2. Preview detected headings (adjust --min-font-ratio if needed)
+arcane recover-outline "book.pdf" --dry-run
+
+# 3. Generate a fixed copy with injected bookmarks
+arcane recover-outline "book.pdf" --output "book-recovered.pdf"
+
+# 4. Verify the injected outlines look correct
+arcane outline "book-recovered.pdf" --depth 3
+
+# 5. Replace the source in your project and re-chunk
+arcane remove "Project" "Book Title"
+arcane add    "Project" "book-recovered.pdf" --textbook --title "Book Title"
+arcane chunk  "Project" --source "Book Title" --depth 1
+```
+
+**Tips:**
+- Increase `--min-font-ratio` (e.g. to 1.4) if too many section headings are detected
+- Use `--depth 1` for chapter-level chunks only; `--depth 2` splits at section level too
+- LaTeX books (Computer Modern fonts: CMBX12, CMBX17) work particularly well
+
 ### `arcane remove <project> [source]`
 
 Removes a source from a project, or an entire project if no source is specified. Cleans up the database, search index, and filesystem.

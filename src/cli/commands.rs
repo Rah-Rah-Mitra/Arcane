@@ -419,6 +419,72 @@ pub fn cmd_list_chunks(project_name: &str, source_filter: Option<&str>) -> Resul
 }
 
 // ---------------------------------------------------------------------------
+// Recover outline command
+// ---------------------------------------------------------------------------
+
+pub fn cmd_recover_outline(
+    file: std::path::PathBuf,
+    output: Option<std::path::PathBuf>,
+    dry_run: bool,
+    min_font_ratio: f64,
+    depth: u32,
+) -> Result<()> {
+    use crate::pdf::heuristics;
+    use lopdf::Document;
+
+    let doc = Document::load(&file)
+        .with_context(|| format!("failed to open PDF at {}", file.display()))?;
+
+    // Build headings.
+    let headings =
+        heuristics::extract_headings(&doc, min_font_ratio as f32, depth);
+
+    if headings.is_empty() {
+        println!(
+            "[arcane] No headings detected in '{}'. Try a lower --min-font-ratio.",
+            file.display()
+        );
+        return Ok(());
+    }
+
+    let chapter_map = heuristics::headings_to_chapter_map(&headings);
+
+    // Print the detected headings table.
+    println!("File: {}", file.display());
+    println!("Detected {} heading(s):\n", chapter_map.len());
+    println!("  {:<6} Title", "Page");
+    println!("  {}", "\u{2500}".repeat(66));
+    for (page_idx, title) in &chapter_map {
+        println!("  {:<6} {}", page_idx + 1, title);
+    }
+    println!();
+
+    if dry_run {
+        println!("[arcane] Dry-run — no file written.");
+        return Ok(());
+    }
+
+    // Inject outlines.
+    let out_path = output.unwrap_or_else(|| file.clone());
+    let mut doc = Document::load(&file)
+        .with_context(|| format!("failed to re-open PDF at {}", file.display()))?;
+
+    let n = heuristics::inject_outlines(&mut doc, &chapter_map)
+        .context("failed to inject outlines")?;
+
+    doc.save(&out_path)
+        .with_context(|| format!("failed to save PDF to {}", out_path.display()))?;
+
+    println!(
+        "[arcane] Injected {n} outline entries → {}",
+        out_path.display()
+    );
+    println!("[arcane] You can now re-chunk with: arcane chunk <project> --source \"<title>\" --force");
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Outline show command
 // ---------------------------------------------------------------------------
 

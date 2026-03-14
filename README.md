@@ -109,6 +109,7 @@ Chapter PDFs are written to `~/Arcane/Library/<Project>/Chunks/<Source>/`.
 | `arcane tag <project> <tag>` | Add a tag to a project |
 | `arcane untag <project> <tag>` | Remove a tag |
 | `arcane outline <file> [--depth N]` | Show PDF outline tree and page labels |
+| `arcane recover-outline <file> [--output F] [--dry-run] [--min-font-ratio R] [--depth N]` | Re-hydrate outlines via font-size heuristics (for PDFs with no bookmarks) |
 | `arcane remove <project> [source]` | Remove a source or entire project |
 | `arcane merge <output> <inputs…>` | Merge multiple PDFs into one |
 | `arcane split <input> <ranges…> [--output-dir D]` | Split a PDF by page ranges |

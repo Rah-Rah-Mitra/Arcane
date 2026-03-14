@@ -182,6 +182,33 @@ pub enum Commands {
         source: Option<String>,
     },
 
+    /// Recover PDF outline bookmarks using font-size heuristics.
+    ///
+    /// Useful for PDFs that have no /Outlines and no /PageLabels (e.g. LaTeX
+    /// books with stripped metadata).  Run with --dry-run first to preview
+    /// what headings are detected, then re-run without it to write the fixed PDF.
+    RecoverOutline {
+        /// Path to the PDF file to analyse.
+        file: PathBuf,
+
+        /// Write the fixed PDF to a new path instead of overwriting the input.
+        #[arg(long)]
+        output: Option<PathBuf>,
+
+        /// Preview detected headings without modifying any file.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Font-size ratio above body text required to classify text as a heading.
+        /// 1.2 means any text 20 % larger than the most common size is a heading.
+        #[arg(long, default_value_t = 1.2)]
+        min_font_ratio: f64,
+
+        /// Maximum heading depth to inject (1 = chapter-level only, 2 = chapters + sections).
+        #[arg(long, default_value_t = 2)]
+        depth: u32,
+    },
+
     /// Show the outline (bookmarks) and page labels of a PDF file.
     Outline {
         /// Path to the PDF file.
