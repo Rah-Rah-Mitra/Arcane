@@ -114,12 +114,61 @@ impl Database {
     }
 
     /// Delete a project by name. Returns true if it existed.
-    #[allow(dead_code)]
+    /// FK cascades handle sources, tags, chunks, and search_meta.
     pub fn delete_project(&self, name: &str) -> Result<bool, StorageError> {
         let affected = self
             .conn
             .execute("DELETE FROM projects WHERE name = ?1", [name])?;
         Ok(affected > 0)
+    }
+
+    /// Get all source titles for a project (used before deletion to clean up search index).
+    pub fn get_source_titles(&self, project_name: &str) -> Result<Vec<String>, StorageError> {
+        let project_id =
+            self.get_project_id(project_name)?
+                .ok_or_else(|| StorageError::ProjectNotFound {
+                    name: project_name.to_string(),
+                })?;
+
+        let mut stmt = self
+            .conn
+            .prepare("SELECT title FROM sources WHERE project_id = ?1")?;
+        let titles = stmt
+            .query_map([&project_id], |row| row.get(0))?
+            .collect::<Result<Vec<String>, _>>()?;
+        Ok(titles)
+    }
+
+    /// Delete a source by project name and title. Returns the blob_hash if one
+    /// was associated (caller can use it for CAS cleanup).
+    /// FK cascades handle source_tags, chunks, and search_meta.
+    pub fn delete_source(
+        &self,
+        project_name: &str,
+        source_title: &str,
+    ) -> Result<Option<String>, StorageError> {
+        let project_id =
+            self.get_project_id(project_name)?
+                .ok_or_else(|| StorageError::ProjectNotFound {
+                    name: project_name.to_string(),
+                })?;
+
+        // Fetch blob_hash before deleting.
+        let blob_hash: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT blob_hash FROM sources WHERE project_id = ?1 AND title = ?2",
+                rusqlite::params![project_id, source_title],
+                |row| row.get(0),
+            )
+            .ok();
+
+        self.conn.execute(
+            "DELETE FROM sources WHERE project_id = ?1 AND title = ?2",
+            rusqlite::params![project_id, source_title],
+        )?;
+
+        Ok(blob_hash)
     }
 
     // ── Tag operations ───────────────────────────────────────────────────

@@ -37,7 +37,12 @@ fn main() -> anyhow::Result<()> {
         Commands::New { name } => commands::cmd_new(&name),
         Commands::List => commands::cmd_list(),
         Commands::Show { name } => commands::cmd_show(&name),
-        Commands::Chunk { project } => commands::cmd_chunk(&project),
+        Commands::Chunk {
+            project,
+            force,
+            depth,
+            dry_run,
+        } => commands::cmd_chunk(&project, force, depth, dry_run),
         Commands::Add {
             project,
             path,
@@ -55,6 +60,13 @@ fn main() -> anyhow::Result<()> {
             tags,
             source_type,
         ),
+        Commands::ListChunks { project, source } => {
+            commands::cmd_list_chunks(&project, source.as_deref())
+        }
+        Commands::Outline { file, depth } => commands::cmd_outline(file, depth),
+        Commands::Remove { project, source } => {
+            commands::cmd_remove(&project, source.as_deref())
+        }
         Commands::Merge { output, inputs } => commands::cmd_merge(output, inputs),
         Commands::Split {
             input,
@@ -69,7 +81,12 @@ fn main() -> anyhow::Result<()> {
         } => commands::cmd_rotate(input, degrees, output, pages),
         Commands::Tag { project, tag } => commands::cmd_tag(&project, &tag),
         Commands::Untag { project, tag } => commands::cmd_untag(&project, &tag),
-        Commands::Search { query, limit } => commands::cmd_search(&query, limit),
+        Commands::Search {
+            query,
+            limit,
+            project,
+            source,
+        } => commands::cmd_search(&query, limit, project.as_deref(), source.as_deref()),
         Commands::Reindex => commands::cmd_reindex(),
         Commands::Tui => commands::cmd_tui(),
         Commands::Watch { project } => commands::cmd_watch(&project),

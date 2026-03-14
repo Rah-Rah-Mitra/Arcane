@@ -6,10 +6,11 @@ A local-first research archival application for organizing academic materials. A
 
 - **Project-Based Organization**: Group related sources under named projects with optional tags
 - **Smart PDF Chunking**: Automatically split textbooks into individual chapter files
-- **Intelligent Chapter Detection**: Extracts chapter boundaries from PDF bookmarks/outlines (with named-destination support) or page labels
+- **Multi-Level Chapter Detection**: Extracts chapter boundaries from PDF bookmarks/outlines with configurable depth (sub-chapters, sections)
 - **Physical/Logical Page Mapping**: Correctly handles front-matter with Roman numerals
 - **Deduplication**: Content-addressed storage (CAS) — adding the same file twice is a no-op
-- **Full-Text Search**: tantivy-powered search across all indexed sources
+- **Full-Text Search**: tantivy-powered search across all indexed sources, with project and source filters
+- **PDF Inspection**: View outline trees and page labels of any PDF before adding
 - **Local-First**: All data stored in `~/Arcane/` with no cloud dependency
 - **Cross-Platform**: Works on Windows (file copies) and Unix (symlinks)
 
@@ -33,15 +34,27 @@ arcane new "Rust-Programming"
 arcane add "Rust-Programming" path/to/textbook.pdf --textbook
 arcane add "Rust-Programming" path/to/paper.pdf              # report (no chunking)
 
-# 3. Split textbooks into per-chapter PDFs (use --release build for speed)
+# 3. Inspect the PDF's outline before chunking
+arcane outline path/to/textbook.pdf --depth 3
+
+# 4. Preview chunk boundaries without writing files
+arcane chunk "Rust-Programming" --dry-run --depth 2
+
+# 5. Split textbooks into per-chapter PDFs (use --release build for speed)
 arcane chunk "Rust-Programming"
 
-# 4. Inspect
+# 6. Inspect
 arcane list
 arcane show "Rust-Programming"
+arcane list-chunks "Rust-Programming"
 
-# 5. Search
+# 7. Search (optionally filter by project or source)
 arcane search "ownership lifetimes" --limit 10
+arcane search "borrowing" --project "Rust-Programming"
+
+# 8. Remove a source or entire project
+arcane remove "Rust-Programming" "textbook"
+arcane remove "Rust-Programming"               # removes entire project
 ```
 
 > **Performance note**: always run `cargo build --release` and use the release binary
@@ -55,8 +68,13 @@ When you run `chunk`, Arcane tries three strategies in order:
 
 1. **PDF Outlines / Bookmarks** (`/Outlines` tree) — preferred. Resolves both direct
    array destinations and named destinations from the `/Names/Dests` tree.
+   Use `--depth N` to control how many levels of the outline tree to use
+   (1 = top-level chapters only, 2 = chapters + sections, etc.).
 2. **Page Labels** (`/PageLabels`) — fallback when no usable bookmarks exist.
 3. **Whole-document fallback** — treats the entire PDF as one chunk.
+
+Use `arcane outline <file>` to inspect a PDF's outline tree and page labels before chunking.
+Use `arcane chunk <project> --dry-run` to preview detected boundaries without writing files.
 
 Chapter PDFs are written to `~/Arcane/Library/<Project>/Chunks/<Source>/`.
 
@@ -80,15 +98,22 @@ Chapter PDFs are written to `~/Arcane/Library/<Project>/Chunks/<Source>/`.
 |---------|-------------|
 | `arcane new <project>` | Create a new project |
 | `arcane add <project> <file> [--textbook] [--start-page N] [--title "…"]` | Add a source |
-| `arcane chunk <project>` | Split textbooks into chapter PDFs |
+| `arcane chunk <project> [--force] [--depth N] [--dry-run]` | Split textbooks into chapter PDFs |
 | `arcane list` | List all projects and their sources |
+| `arcane list-chunks <project> [source]` | List chunk files for a source |
 | `arcane show <project>` | Show detailed project info |
-| `arcane search <query> [--limit N]` | Full-text search |
-| `arcane reindex <project>` | Rebuild the search index for a project |
+| `arcane search <query> [--limit N] [--project P] [--source S]` | Full-text search with optional filters |
+| `arcane reindex` | Rebuild the full-text search index |
 | `arcane tag <project> <tag>` | Add a tag to a project |
 | `arcane untag <project> <tag>` | Remove a tag |
-| `arcane protect <project> <file> <password>` | Password-protect a PDF |
-| `arcane unlock <project> <file> <password>` | Remove password protection |
+| `arcane outline <file> [--depth N]` | Show PDF outline tree and page labels |
+| `arcane remove <project> [source]` | Remove a source or entire project |
+| `arcane merge <output> <inputs…>` | Merge multiple PDFs into one |
+| `arcane split <input> <ranges…> [--output-dir D]` | Split a PDF by page ranges |
+| `arcane rotate <input> [--degrees N] [--pages P]` | Rotate PDF pages |
+| `arcane protect <input> --password P` | Password-protect a PDF |
+| `arcane unlock <input> --password P` | Remove password protection |
+| `arcane watch <project>` | Watch project directory for new PDFs |
 | `arcane tui` | Launch the interactive terminal UI |
 
 ## Requirements

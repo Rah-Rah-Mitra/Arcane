@@ -10,6 +10,7 @@ Welcome to Arcane! This guide will help you get started with organizing your res
 - [Command Reference](#command-reference)
 - [Common Workflows](#common-workflows)
 - [Understanding the Filesystem](#understanding-the-filesystem)
+- [Removing Sources and Projects](#removing-sources-and-projects)
 - [Troubleshooting](#troubleshooting)
 
 ## Introduction
@@ -208,16 +209,121 @@ arcane add "Algorithms" ~/Books/book.pdf --textbook --title "Algorithms Textbook
 
 **Note:** If the project doesn't exist, it will be created automatically.
 
-### `arcane chunk <project>`
+### `arcane chunk <project> [--force] [--depth N] [--dry-run]`
 
 Splits all textbook sources in a project into individual chapter PDFs.
 
-**Example:**
+**Options:**
+- `--force`: Delete existing chunks and regenerate them
+- `--depth N`: How many levels of the outline tree to use (default: 1 = top-level chapters only; 2 = chapters + sections; etc.)
+- `--dry-run`: Preview detected chapter boundaries without writing any files
+
+**Examples:**
+
+Basic chunking:
 ```bash
 arcane chunk "Algorithms"
 ```
 
-This command is idempotent—running it multiple times won't re-process chapters that already exist.
+Preview what chapters will be detected:
+```bash
+arcane chunk "Algorithms" --dry-run
+```
+
+Force re-chunking with sub-chapter granularity:
+```bash
+arcane chunk "Algorithms" --force --depth 2
+```
+
+This command is idempotent—running it multiple times won't re-process chapters that already exist (unless `--force` is used).
+
+### `arcane list-chunks <project> [source]`
+
+Lists the chunk files for a source in a project.
+
+**Examples:**
+
+List chunks for all sources:
+```bash
+arcane list-chunks "Algorithms"
+```
+
+List chunks for a specific source:
+```bash
+arcane list-chunks "Algorithms" "CLRS 4th Edition"
+```
+
+### `arcane search <query> [--limit N] [--project P] [--source S]`
+
+Searches across all indexed sources. Optionally filter by project or source.
+
+**Options:**
+- `--limit N`: Maximum number of results (default: 10)
+- `--project P`: Only search within a specific project
+- `--source S`: Only search within a specific source title
+
+**Examples:**
+
+Search everywhere:
+```bash
+arcane search "dynamic programming"
+```
+
+Search within one project:
+```bash
+arcane search "quicksort" --project "Algorithms"
+```
+
+Search within one source:
+```bash
+arcane search "binary heap" --source "CLRS 4th Edition"
+```
+
+### `arcane outline <file> [--depth N]`
+
+Displays the outline (bookmarks) and page labels of any PDF file. Useful for inspecting a PDF before adding it to a project.
+
+**Options:**
+- `--depth N`: Maximum depth of outline entries to display (default: 10)
+
+**Example:**
+```bash
+arcane outline ~/Books/algorithms.pdf --depth 3
+```
+
+**Output:**
+```
+File: /home/user/Books/algorithms.pdf
+Total pages: 1312
+
+Outlines (depth 3):
+  #    Title                                              Pages
+  ──────────────────────────────────────────────────────────────────────
+  01   Front Matter                                       1-18
+  02   I Foundations                                      19-20
+  03   I Foundations > 1 The Role of Algorithms           21-36
+  ...
+
+Page labels:
+  Page 1 — Front Matter (roman)
+  Page 19 — Content (arabic)
+```
+
+### `arcane remove <project> [source]`
+
+Removes a source from a project, or an entire project if no source is specified. Cleans up the database, search index, and filesystem.
+
+**Examples:**
+
+Remove a single source:
+```bash
+arcane remove "Algorithms" "CLRS 4th Edition"
+```
+
+Remove an entire project and all its sources:
+```bash
+arcane remove "Algorithms"
+```
 
 ### `arcane --help` or `arcane -h`
 
@@ -233,6 +339,9 @@ Let's say you're taking a Machine Learning course and want to organize all mater
 # Create the project
 arcane new "Machine Learning Spring 2026"
 
+# Inspect the textbook's outline before adding
+arcane outline ~/Books/ml-textbook.pdf --depth 2
+
 # Add the main textbook
 arcane add "Machine Learning Spring 2026" ~/Books/ml-textbook.pdf --textbook --start-page 10
 
@@ -243,11 +352,18 @@ arcane add "Machine Learning Spring 2026" ~/Lectures/week1.pdf
 arcane add "Machine Learning Spring 2026" ~/Papers/neural-networks.pdf
 arcane add "Machine Learning Spring 2026" ~/Papers/deep-learning.pdf
 
-# Split the textbook into chapters
-arcane chunk "Machine Learning Spring 2026"
+# Preview chunk boundaries
+arcane chunk "Machine Learning Spring 2026" --dry-run --depth 2
+
+# Split the textbook into chapters (with sub-chapter depth)
+arcane chunk "Machine Learning Spring 2026" --depth 2
 
 # View everything
 arcane show "Machine Learning Spring 2026"
+arcane list-chunks "Machine Learning Spring 2026"
+
+# Search within this project only
+arcane search "gradient descent" --project "Machine Learning Spring 2026"
 ```
 
 ### Workflow 2: Research Paper Collection
@@ -285,6 +401,13 @@ arcane chunk "Algorithms Study"
 
 # Now you have chapters from all three books organized
 arcane show "Algorithms Study"
+arcane list-chunks "Algorithms Study"
+
+# Search a specific book
+arcane search "red-black trees" --source "CLRS 4th Edition"
+
+# Later, remove a source you no longer need
+arcane remove "Algorithms Study" "Sedgewick & Wayne"
 ```
 
 ## Understanding the Filesystem
@@ -327,22 +450,64 @@ Contains symlinks (or copies on Windows) to the original PDF files. This allows 
 
 Contains the individual chapter PDFs extracted from textbooks. Files are named with a prefix number for sorting (e.g., `01_`, `02_`, etc.) followed by the chapter title.
 
+## Removing Sources and Projects
+
+### Removing a Source
+
+To remove a single source from a project:
+
+```bash
+arcane remove "Algorithms" "CLRS 4th Edition"
+```
+
+This will:
+- Remove the source from the database and project metadata
+- Delete the symlink/copy in `Originals/`
+- Delete the chunk directory for that source
+- Remove the source from the search index
+
+### Removing a Project
+
+To remove an entire project and all its sources:
+
+```bash
+arcane remove "Algorithms"
+```
+
+This will:
+- Remove the project and all sources from the database
+- Delete the entire `~/Arcane/Library/Algorithms/` directory
+- Remove all sources from the search index
+
+**Note:** CAS blobs are not deleted when removing sources or projects. They remain in the content-addressed store for potential reuse.
+
 ## Troubleshooting
 
 ### My textbook wasn't split into chapters
 
 **Possible causes:**
 
-1. **The PDF doesn't have chapter metadata**: Some PDFs don't have bookmarks or page labels. Try using the `--start-page` option to help Arcane map pages correctly.
+1. **The PDF doesn't have chapter metadata**: Some PDFs don't have bookmarks or page labels. Use `arcane outline <file>` to check. Try using the `--start-page` option to help Arcane map pages correctly.
 
 2. **The source wasn't marked as a textbook**: Make sure you used the `--textbook` flag when adding the source.
 
-3. **The chunks already exist**: Arcane won't re-process existing chunks. Delete the chunks directory if you want to re-chunk.
+3. **The chunks already exist**: Arcane won't re-process existing chunks. Use `--force` to regenerate.
+
+4. **Outline depth too shallow**: The PDF may have chapters at a deeper outline level. Try `--depth 2` or `--depth 3`.
 
 **Solution:**
 ```bash
-# Remove the source and re-add with correct flags
-# (You'll need to manually remove it from projects.json currently)
+# Inspect the PDF's outline first
+arcane outline ~/path/to/book.pdf --depth 3
+
+# Preview what chapters will be detected
+arcane chunk "Project" --dry-run --depth 2
+
+# Force re-chunk with deeper outline parsing
+arcane chunk "Project" --force --depth 2
+
+# Or remove and re-add with correct flags
+arcane remove "Project" "book"
 arcane add "Project" ~/path/to/book.pdf --textbook --start-page 1
 arcane chunk "Project"
 ```

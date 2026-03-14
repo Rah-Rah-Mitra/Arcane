@@ -66,7 +66,7 @@ fn handle_search_keys(state: &mut AppState, code: KeyCode) -> anyhow::Result<()>
 
 fn run_search(state: &mut AppState) -> anyhow::Result<()> {
     let idx = SearchIndex::open_or_create()?;
-    state.search_results = search::search(&idx, &state.search_input, 20)?;
+    state.search_results = search::search(&idx, &state.search_input, 20, None, None)?;
     state.selected_result = 0;
     Ok(())
 }

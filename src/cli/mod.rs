@@ -65,6 +65,18 @@ pub enum Commands {
     Chunk {
         /// Project name.
         project: String,
+
+        /// Force re-chunking even if chunks already exist.
+        #[arg(long)]
+        force: bool,
+
+        /// Outline depth to use for chunking (1 = top-level only, 2+ = sub-chapters).
+        #[arg(long, default_value_t = 1)]
+        depth: u32,
+
+        /// Preview detected chapter boundaries without writing files.
+        #[arg(long)]
+        dry_run: bool,
     },
 
     /// Merge multiple PDF files into one.
@@ -135,6 +147,14 @@ pub enum Commands {
         /// Maximum number of results to return.
         #[arg(long, default_value_t = 10)]
         limit: usize,
+
+        /// Filter results to a specific project.
+        #[arg(long)]
+        project: Option<String>,
+
+        /// Filter results to a specific source title.
+        #[arg(long)]
+        source: Option<String>,
     },
 
     /// Rebuild the full-text search index from all sources.
@@ -147,6 +167,34 @@ pub enum Commands {
     Watch {
         /// Project name to watch.
         project: String,
+    },
+
+    /// List chunk files for a source in a project.
+    ListChunks {
+        /// Project name.
+        project: String,
+
+        /// Source title. If omitted, lists chunks for all sources.
+        source: Option<String>,
+    },
+
+    /// Show the outline (bookmarks) and page labels of a PDF file.
+    Outline {
+        /// Path to the PDF file.
+        file: PathBuf,
+
+        /// Maximum depth of outline entries to display.
+        #[arg(long, default_value_t = 10)]
+        depth: u32,
+    },
+
+    /// Remove a source from a project, or an entire project.
+    Remove {
+        /// Project name.
+        project: String,
+
+        /// Source title to remove. If omitted, removes the entire project.
+        source: Option<String>,
     },
 
     /// Encrypt a PDF with a password.

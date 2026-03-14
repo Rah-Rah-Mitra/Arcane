@@ -77,9 +77,12 @@ impl SourceMeta {
 pub trait Source {
     /// Split the source into per-chapter PDFs inside `chunks_dir`.
     ///
+    /// `depth` controls how many levels of the outline tree to use for
+    /// boundary detection (1 = top-level only).
+    ///
     /// Implementations are **idempotent**: if the chunks directory is already
     /// populated they should return early without re-processing.
-    fn chunk(&self, chunks_dir: &std::path::Path) -> Result<()>;
+    fn chunk(&self, chunks_dir: &std::path::Path, depth: u32) -> Result<()>;
 
     /// Placeholder for future YouTube transcript / video-lecture integration.
     #[allow(dead_code)]
@@ -106,8 +109,8 @@ impl Textbook {
 }
 
 impl Source for Textbook {
-    fn chunk(&self, chunks_dir: &std::path::Path) -> Result<()> {
-        crate::pdf::engine::chunk_pdf(&self.meta, chunks_dir)
+    fn chunk(&self, chunks_dir: &std::path::Path, depth: u32) -> Result<()> {
+        crate::pdf::engine::chunk_pdf(&self.meta, chunks_dir, depth)
     }
 }
 
@@ -128,7 +131,7 @@ impl Report {
 }
 
 impl Source for Report {
-    fn chunk(&self, _chunks_dir: &std::path::Path) -> Result<()> {
+    fn chunk(&self, _chunks_dir: &std::path::Path, _depth: u32) -> Result<()> {
         tracing::info!(
             "'{}' is a Report — chunking is not required.",
             self.meta.title
@@ -176,7 +179,7 @@ mod tests {
         let report_meta = SourceMeta::report("Notes", PathBuf::from("/tmp/notes.pdf"));
         let source = build_source(report_meta);
         // Report::chunk should succeed without touching the filesystem
-        let result = source.chunk(std::path::Path::new("/tmp"));
+        let result = source.chunk(std::path::Path::new("/tmp"), 1);
         assert!(result.is_ok());
     }
 

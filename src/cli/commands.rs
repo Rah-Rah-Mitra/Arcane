@@ -81,11 +81,42 @@ pub fn cmd_show(name: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn cmd_chunk(project_name: &str) -> Result<()> {
+pub fn cmd_chunk(project_name: &str, force: bool, depth: u32, dry_run: bool) -> Result<()> {
     let store = ProjectStore::load()?;
     let project = store
         .get(project_name)
         .with_context(|| format!("project '{project_name}' not found"))?;
+
+    // ── Dry-run: show detected boundaries without writing files ──────────
+    if dry_run {
+        for meta in &project.sources {
+            if !meta.needs_chunking {
+                continue;
+            }
+            println!("Source: {}", meta.title);
+            match crate::pdf::engine::detect_boundaries(meta, depth) {
+                Ok(ranges) => {
+                    println!(
+                        "  {:<4} {:<50} {}",
+                        "#", "Chapter", "Pages"
+                    );
+                    println!("  {}", "\u{2500}".repeat(70));
+                    for (i, (start, end, title)) in ranges.iter().enumerate() {
+                        println!(
+                            "  {:<4} {:<50} {}-{}",
+                            format!("{:02}", i + 1),
+                            title,
+                            start + 1,
+                            end + 1
+                        );
+                    }
+                    println!();
+                }
+                Err(e) => println!("  Error detecting boundaries: {e}\n"),
+            }
+        }
+        return Ok(());
+    }
 
     // Each source gets its own subdirectory so multiple textbooks don't collide
     // and the idempotency guard works correctly per-source.
@@ -94,8 +125,15 @@ pub fn cmd_chunk(project_name: &str) -> Result<()> {
         .par_iter()
         .map(|meta| {
             let chunks_dir = storage::filesystem::source_chunks_dir(project_name, &meta.title)?;
+
+            // When --force is set, remove existing chunks so they get regenerated.
+            if force && chunks_dir.exists() {
+                std::fs::remove_dir_all(&chunks_dir)?;
+                std::fs::create_dir_all(&chunks_dir)?;
+            }
+
             let source = build_source(meta.clone());
-            source.chunk(&chunks_dir)
+            source.chunk(&chunks_dir, depth)
         })
         .collect();
 
@@ -255,6 +293,232 @@ pub fn cmd_add(
 }
 
 // ---------------------------------------------------------------------------
+// List chunks command
+// ---------------------------------------------------------------------------
+
+pub fn cmd_list_chunks(project_name: &str, source_filter: Option<&str>) -> Result<()> {
+    let store = ProjectStore::load()?;
+    let project = store
+        .get(project_name)
+        .with_context(|| format!("project '{project_name}' not found"))?;
+
+    let sources: Vec<&SourceMeta> = if let Some(title) = source_filter {
+        project
+            .sources
+            .iter()
+            .filter(|s| s.title == title)
+            .collect()
+    } else {
+        project.sources.iter().collect()
+    };
+
+    if sources.is_empty() {
+        println!("No matching sources found.");
+        return Ok(());
+    }
+
+    for meta in &sources {
+        let chunks_dir = storage::filesystem::source_chunks_dir(project_name, &meta.title)?;
+        println!("Source: {}", meta.title);
+
+        if !chunks_dir.exists() {
+            println!("  (no chunks)\n");
+            continue;
+        }
+
+        let mut entries: Vec<String> = std::fs::read_dir(&chunks_dir)?
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.path()
+                    .extension()
+                    .and_then(|x| x.to_str())
+                    .map(|x| x.eq_ignore_ascii_case("pdf"))
+                    .unwrap_or(false)
+            })
+            .filter_map(|e| e.file_name().to_str().map(String::from))
+            .collect();
+
+        entries.sort();
+
+        if entries.is_empty() {
+            println!("  (no chunks)\n");
+            continue;
+        }
+
+        for name in &entries {
+            println!("  \u{2022} {name}");
+        }
+        println!("  ({} chunk(s))\n", entries.len());
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Outline show command
+// ---------------------------------------------------------------------------
+
+pub fn cmd_outline(path: PathBuf, depth: u32) -> Result<()> {
+    use crate::pdf::outlines::extract_chapters_with_depth;
+    use crate::pdf::page_labels::extract_chapters_from_page_labels;
+
+    let doc = lopdf::Document::load(&path)
+        .with_context(|| format!("failed to open PDF at {}", path.display()))?;
+
+    let total_pages = doc.get_pages().len();
+    println!("File: {}", path.display());
+    println!("Total pages: {total_pages}\n");
+
+    // ── Outlines ─────────────────────────────────────────────────────────
+    println!("Outlines (depth {depth}):");
+    match extract_chapters_with_depth(&doc, depth) {
+        Ok(chapters) => {
+            let total = doc.get_pages().len() as u32;
+            let ranges = crate::pdf::engine::boundaries_to_ranges(&chapters, total);
+            println!(
+                "  {:<4} {:<50} {}",
+                "#", "Title", "Pages"
+            );
+            println!("  {}", "\u{2500}".repeat(70));
+            for (i, (start, end, title)) in ranges.iter().enumerate() {
+                println!(
+                    "  {:<4} {:<50} {}-{}",
+                    format!("{:02}", i + 1),
+                    title,
+                    start + 1,
+                    end + 1
+                );
+            }
+        }
+        Err(e) => println!("  (none — {e})"),
+    }
+
+    // ── Page labels ──────────────────────────────────────────────────────
+    println!("\nPage labels:");
+    match extract_chapters_from_page_labels(&doc) {
+        Ok(labels) => {
+            for (page_idx, label) in &labels {
+                println!("  Page {} — {}", page_idx + 1, label);
+            }
+        }
+        Err(e) => println!("  (none — {e})"),
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Remove commands
+// ---------------------------------------------------------------------------
+
+pub fn cmd_remove(project_name: &str, source_title: Option<&str>) -> Result<()> {
+    match source_title {
+        Some(title) => cmd_remove_source(project_name, title),
+        None => cmd_remove_project(project_name),
+    }
+}
+
+fn cmd_remove_source(project_name: &str, source_title: &str) -> Result<()> {
+    // ── Legacy JSON store ────────────────────────────────────────────────
+    let mut store = ProjectStore::load()?;
+    let project = store
+        .get_mut(project_name)
+        .with_context(|| format!("project '{project_name}' not found"))?;
+
+    // Find the source's filename before removing (needed to clean up Originals/).
+    let original_filename = project
+        .sources
+        .iter()
+        .find(|s| s.title == source_title)
+        .map(|s| {
+            s.path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string()
+        });
+
+    let before = project.sources.len();
+    project.sources.retain(|s| s.title != source_title);
+    if project.sources.len() == before {
+        anyhow::bail!("source '{source_title}' not found in project '{project_name}'");
+    }
+    store.save()?;
+
+    // ── SQLite database ──────────────────────────────────────────────────
+    let db = Database::open_or_create().map_err(|e| anyhow::anyhow!("{e}"))?;
+    if db
+        .project_exists(project_name)
+        .map_err(|e| anyhow::anyhow!("{e}"))?
+    {
+        let _ = db
+            .delete_source(project_name, source_title)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+    }
+
+    // ── Search index ─────────────────────────────────────────────────────
+    let source_id = format!("{project_name}:{source_title}");
+    let idx = SearchIndex::open_or_create()?;
+    let _ = idx.remove_source(&source_id);
+
+    // ── Filesystem cleanup ───────────────────────────────────────────────
+    // Remove the symlink/copy in Originals/.
+    if let Some(filename) = original_filename {
+        let originals = storage::originals_dir(project_name)?;
+        let link_path = originals.join(&filename);
+        if link_path.exists() {
+            std::fs::remove_file(&link_path).ok();
+        }
+    }
+
+    // Remove the Chunks/{source_title}/ directory.
+    let chunks = storage::filesystem::source_chunks_dir(project_name, source_title)?;
+    if chunks.exists() {
+        std::fs::remove_dir_all(&chunks).ok();
+    }
+
+    println!("[arcane] Removed source '{source_title}' from project '{project_name}'.");
+    Ok(())
+}
+
+fn cmd_remove_project(project_name: &str) -> Result<()> {
+    // ── Collect source titles first (for search index cleanup) ───────────
+    let store = ProjectStore::load()?;
+    let source_titles: Vec<String> = store
+        .get(project_name)
+        .map(|p| p.sources.iter().map(|s| s.title.clone()).collect())
+        .unwrap_or_default();
+
+    // ── Legacy JSON store ────────────────────────────────────────────────
+    let mut store = ProjectStore::load()?;
+    if !store.remove(project_name) {
+        anyhow::bail!("project '{project_name}' not found");
+    }
+    store.save()?;
+
+    // ── SQLite database ──────────────────────────────────────────────────
+    let db = Database::open_or_create().map_err(|e| anyhow::anyhow!("{e}"))?;
+    let _ = db
+        .delete_project(project_name)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    // ── Search index (remove all sources) ────────────────────────────────
+    let idx = SearchIndex::open_or_create()?;
+    for title in &source_titles {
+        let source_id = format!("{project_name}:{title}");
+        let _ = idx.remove_source(&source_id);
+    }
+
+    // ── Filesystem cleanup ───────────────────────────────────────────────
+    let project_path = storage::filesystem::project_dir(project_name)?;
+    if project_path.exists() {
+        std::fs::remove_dir_all(&project_path).ok();
+    }
+
+    println!("[arcane] Removed project '{project_name}' and all its sources.");
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Structural PDF operations
 // ---------------------------------------------------------------------------
 
@@ -349,9 +613,14 @@ pub fn cmd_untag(project_name: &str, tag: &str) -> Result<()> {
 // Search commands
 // ---------------------------------------------------------------------------
 
-pub fn cmd_search(query: &str, limit: usize) -> Result<()> {
+pub fn cmd_search(
+    query: &str,
+    limit: usize,
+    project_filter: Option<&str>,
+    source_filter: Option<&str>,
+) -> Result<()> {
     let idx = SearchIndex::open_or_create()?;
-    let results = crate::search::search(&idx, query, limit)?;
+    let results = crate::search::search(&idx, query, limit, project_filter, source_filter)?;
 
     if results.is_empty() {
         println!("No results found for '{query}'.");

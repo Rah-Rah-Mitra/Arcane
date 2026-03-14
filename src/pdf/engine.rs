@@ -25,7 +25,7 @@ use anyhow::{bail, Context, Result};
 use lopdf::{Document, Object};
 use rayon::prelude::*;
 
-use super::outlines::extract_chapters_from_outlines;
+use super::outlines::{extract_chapters_from_outlines, extract_chapters_with_depth};
 use super::page_labels::extract_chapters_from_page_labels;
 use crate::models::SourceMeta;
 
@@ -33,12 +33,46 @@ use crate::models::SourceMeta;
 // Public entry-point
 // ---------------------------------------------------------------------------
 
+/// Detect chapter boundaries for a source without writing any files.
+///
+/// Returns `(start_page, end_page, title)` triples (0-based, inclusive).
+pub fn detect_boundaries(meta: &SourceMeta, depth: u32) -> anyhow::Result<Vec<(u32, u32, String)>> {
+    let doc = Document::load(&meta.path)
+        .with_context(|| format!("failed to open PDF at {}", meta.path.display()))?;
+    let total_pages = doc.get_pages().len() as u32;
+    let chapters = resolve_chapters(meta, &doc, depth);
+    Ok(boundaries_to_ranges(&chapters, total_pages))
+}
+
+/// Resolve chapter boundaries from the given source metadata and document.
+fn resolve_chapters(meta: &SourceMeta, doc: &Document, depth: u32) -> BTreeMap<u32, String> {
+    let chapters: BTreeMap<u32, String> = if !meta.chapter_map.is_empty() {
+        meta.chapter_map
+            .iter()
+            .map(|(&k, v)| (k, v.clone()))
+            .collect()
+    } else {
+        extract_chapters_with_depth(doc, depth)
+            .or_else(|_| extract_chapters_from_outlines(doc))
+            .or_else(|_| extract_chapters_from_page_labels(doc))
+            .unwrap_or_default()
+    };
+
+    if chapters.is_empty() {
+        let mut m = BTreeMap::new();
+        m.insert(0u32, meta.title.clone());
+        m
+    } else {
+        chapters
+    }
+}
+
 /// Split the PDF described by `meta` and write per-chapter files into
 /// `chunks_dir`.
 ///
 /// The function is **idempotent**: if `chunks_dir` already contains `.pdf`
 /// files it returns early without re-processing.
-pub fn chunk_pdf(meta: &SourceMeta, chunks_dir: &Path) -> anyhow::Result<()> {
+pub fn chunk_pdf(meta: &SourceMeta, chunks_dir: &Path, depth: u32) -> anyhow::Result<()> {
     // ── Idempotency guard ────────────────────────────────────────────────────
     if is_already_chunked(chunks_dir)? {
         tracing::info!(
@@ -58,29 +92,7 @@ pub fn chunk_pdf(meta: &SourceMeta, chunks_dir: &Path) -> anyhow::Result<()> {
     tracing::info!("Total physical pages: {total_pages}");
 
     // ── Determine chapter boundaries ─────────────────────────────────────────
-    // BTreeMap<physical_start_index (0-based), chapter_title>
-    let chapters: BTreeMap<u32, String> = if !meta.chapter_map.is_empty() {
-        // The user provided an explicit mapping — use it directly.
-        meta.chapter_map
-            .iter()
-            .map(|(&k, v)| (k, v.clone()))
-            .collect()
-    } else {
-        // Try automatic detection.
-        extract_chapters_from_outlines(&doc)
-            .or_else(|_| extract_chapters_from_page_labels(&doc))
-            .unwrap_or_default()
-    };
-
-    // ── Fallback: treat whole document as one chunk ───────────────────────────
-    let chapters = if chapters.is_empty() {
-        let title = meta.title.clone();
-        let mut m = BTreeMap::new();
-        m.insert(0u32, title);
-        m
-    } else {
-        chapters
-    };
+    let chapters = resolve_chapters(meta, &doc, depth);
 
     // ── Build page ranges from boundary map ──────────────────────────────────
     let ranges = boundaries_to_ranges(&chapters, total_pages);

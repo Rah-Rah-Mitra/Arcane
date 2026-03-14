@@ -2,9 +2,9 @@
 
 use anyhow::{Context, Result};
 use tantivy::collector::TopDocs;
-use tantivy::query::QueryParser;
-use tantivy::schema::Value;
-use tantivy::TantivyDocument;
+use tantivy::query::{BooleanQuery, Occur, QueryParser, TermQuery};
+use tantivy::schema::{IndexRecordOption, Value};
+use tantivy::{Term, TantivyDocument};
 
 use super::indexer::{
     SearchIndex, FIELD_BODY, FIELD_CHAPTER, FIELD_PAGE, FIELD_PROJECT, FIELD_SOURCE_ID, FIELD_TITLE,
@@ -28,10 +28,17 @@ pub struct SearchResult {
     pub score: f32,
 }
 
-/// Search the index for documents matching the query string.
+/// Search the index for documents matching the query string, with optional
+/// project and source filters.
 ///
 /// Returns up to `limit` results, sorted by relevance score (descending).
-pub fn search(index: &SearchIndex, query_str: &str, limit: usize) -> Result<Vec<SearchResult>> {
+pub fn search(
+    index: &SearchIndex,
+    query_str: &str,
+    limit: usize,
+    project_filter: Option<&str>,
+    source_filter: Option<&str>,
+) -> Result<Vec<SearchResult>> {
     let reader = index
         .index()
         .reader()
@@ -47,12 +54,45 @@ pub fn search(index: &SearchIndex, query_str: &str, limit: usize) -> Result<Vec<
     let query_parser =
         QueryParser::for_index(index.index(), vec![body_field, title_field, chapter_field]);
 
-    let query = query_parser
+    let parsed = query_parser
         .parse_query(query_str)
         .with_context(|| format!("failed to parse search query: {query_str}"))?;
 
+    // Wrap with optional project/source filters using a BooleanQuery.
+    let query: Box<dyn tantivy::query::Query> =
+        if project_filter.is_some() || source_filter.is_some() {
+            let project_field = index.schema().get_field(FIELD_PROJECT).unwrap();
+            let title_filter_field = index.schema().get_field(FIELD_TITLE).unwrap();
+
+            let mut clauses: Vec<(Occur, Box<dyn tantivy::query::Query>)> =
+                vec![(Occur::Must, parsed)];
+
+            if let Some(proj) = project_filter {
+                clauses.push((
+                    Occur::Must,
+                    Box::new(TermQuery::new(
+                        Term::from_field_text(project_field, proj),
+                        IndexRecordOption::Basic,
+                    )),
+                ));
+            }
+            if let Some(src) = source_filter {
+                clauses.push((
+                    Occur::Must,
+                    Box::new(TermQuery::new(
+                        Term::from_field_text(title_filter_field, src),
+                        IndexRecordOption::Basic,
+                    )),
+                ));
+            }
+
+            Box::new(BooleanQuery::new(clauses))
+        } else {
+            parsed
+        };
+
     let top_docs = searcher
-        .search(&query, &TopDocs::with_limit(limit))
+        .search(&*query, &TopDocs::with_limit(limit))
         .context("search execution failed")?;
 
     let source_id_field = index.schema().get_field(FIELD_SOURCE_ID).unwrap();
@@ -139,13 +179,13 @@ mod tests {
             .unwrap();
 
         // Search for "quantum"
-        let results = search(&idx, "quantum", 10).unwrap();
+        let results = search(&idx, "quantum", 10, None, None).unwrap();
         assert!(!results.is_empty(), "should find results for 'quantum'");
         assert_eq!(results[0].source_title, "Griffiths");
         assert_eq!(results[0].project_name, "Physics");
 
         // Search for something not in the index
-        let results = search(&idx, "cryptocurrency", 10).unwrap();
+        let results = search(&idx, "cryptocurrency", 10, None, None).unwrap();
         assert!(results.is_empty(), "should not find 'cryptocurrency'");
     }
 
@@ -169,7 +209,7 @@ mod tests {
         idx.index_source("src-b", "CS", "Tanenbaum", None, &pages_b)
             .unwrap();
 
-        let results = search(&idx, "algorithms", 10).unwrap();
+        let results = search(&idx, "algorithms", 10, None, None).unwrap();
         assert_eq!(results.len(), 2, "should find 'algorithms' in both sources");
     }
 }

@@ -10,14 +10,21 @@ use lopdf::{Document, Object, ObjectId};
 
 use super::pdf_string_to_string; // UTF-16-BE aware
 
-/// Walk the PDF Outlines (bookmarks) tree and collect the first-level entries.
-///
-/// The `page_map` (1-based page number → ObjectId) must be pre-built by the
-/// caller with a single `doc.get_pages()` call and reused here — avoids an
-/// O(N × P) traversal where N = outline entries, P = total pages.
+/// Walk the PDF Outlines (bookmarks) tree and collect entries up to `max_depth`
+/// levels deep (1 = top-level only, which is the original behavior).
 ///
 /// Returns 0-based physical page indices.
 pub fn extract_chapters_from_outlines(doc: &Document) -> Result<BTreeMap<u32, String>> {
+    extract_chapters_with_depth(doc, 1)
+}
+
+/// Walk the PDF Outlines tree collecting entries up to `max_depth` levels.
+///
+/// Depth 1 = top-level chapters only, 2 = chapters + sections, etc.
+pub fn extract_chapters_with_depth(
+    doc: &Document,
+    max_depth: u32,
+) -> Result<BTreeMap<u32, String>> {
     let catalog = doc.catalog()?;
 
     let outlines_ref = match catalog.get(b"Outlines") {
@@ -34,7 +41,6 @@ pub fn extract_chapters_from_outlines(doc: &Document) -> Result<BTreeMap<u32, St
     };
 
     // Build the page map ONCE — ObjectId → 0-based physical page index.
-    // This replaces per-entry calls to doc.get_pages() (was O(N × P)).
     let oid_to_page: BTreeMap<ObjectId, u32> = doc
         .get_pages()
         .into_iter()
@@ -42,17 +48,65 @@ pub fn extract_chapters_from_outlines(doc: &Document) -> Result<BTreeMap<u32, St
         .collect();
 
     let mut result = BTreeMap::new();
+    walk_outline_entries(doc, first_ref, &oid_to_page, 1, max_depth, None, &mut result);
+
+    if result.is_empty() {
+        bail!("no usable entries in /Outlines");
+    }
+    Ok(result)
+}
+
+/// Recursively walk outline entries at the current depth, following `Next`
+/// for siblings and `First` for children (when depth allows).
+fn walk_outline_entries(
+    doc: &Document,
+    first_ref: ObjectId,
+    oid_to_page: &BTreeMap<ObjectId, u32>,
+    current_depth: u32,
+    max_depth: u32,
+    parent_title: Option<&str>,
+    result: &mut BTreeMap<u32, String>,
+) {
     let mut current_ref: Option<ObjectId> = Some(first_ref);
 
     while let Some(item_ref) = current_ref {
-        let item = doc.get_object(item_ref)?;
-        let item_dict = item.as_dict()?;
+        let item = match doc.get_object(item_ref) {
+            Ok(obj) => obj,
+            Err(_) => break,
+        };
+        let item_dict = match item.as_dict() {
+            Ok(d) => d,
+            Err(_) => break,
+        };
 
         if let Ok(title_obj) = item_dict.get(b"Title") {
-            let title = pdf_string_to_string(title_obj);
+            let raw_title = pdf_string_to_string(title_obj);
 
-            if let Some(page_idx) = resolve_dest_page(doc, item_dict, &oid_to_page) {
+            // Build qualified title for nested entries.
+            let title = match parent_title {
+                Some(parent) if current_depth > 1 => format!("{parent} > {raw_title}"),
+                _ => raw_title.clone(),
+            };
+
+            if let Some(page_idx) = resolve_dest_page(doc, item_dict, oid_to_page) {
                 result.insert(page_idx, title);
+            }
+
+            // Recurse into children if depth allows.
+            if current_depth < max_depth {
+                if let Ok(first_child) = item_dict.get(b"First") {
+                    if let Ok(child_ref) = first_child.as_reference() {
+                        walk_outline_entries(
+                            doc,
+                            child_ref,
+                            oid_to_page,
+                            current_depth + 1,
+                            max_depth,
+                            Some(&raw_title),
+                            result,
+                        );
+                    }
+                }
             }
         }
 
@@ -61,11 +115,6 @@ pub fn extract_chapters_from_outlines(doc: &Document) -> Result<BTreeMap<u32, St
             .ok()
             .and_then(|o| o.as_reference().ok());
     }
-
-    if result.is_empty() {
-        bail!("no usable entries in /Outlines");
-    }
-    Ok(result)
 }
 
 /// Attempt to resolve the physical page index (0-based) from an outline item.
