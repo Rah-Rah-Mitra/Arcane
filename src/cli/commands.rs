@@ -191,6 +191,7 @@ pub fn cmd_chunk(
 
     // Update metadata for each source that was chunked.
     let mut needs_update = false;
+    let mut chunked_indices: Vec<usize> = Vec::new();
     for result in results {
         let (idx, page_count, _chunk_count) = result?;
         let source = &mut project.sources[idx];
@@ -198,6 +199,71 @@ pub fn cmd_chunk(
             source.depth = Some(depth);
             source.page_count = Some(page_count);
             needs_update = true;
+            chunked_indices.push(idx);
+        }
+    }
+
+    // ── Inject outlines into source PDFs that have a chapter_map ─────────
+    // This permanently recovers the outline metadata so future tools can
+    // read proper bookmarks from the PDF.
+    for &idx in &chunked_indices {
+        let source = &project.sources[idx];
+        if source.chapter_map.is_empty() || !source.path.exists() {
+            continue;
+        }
+        // Check if the PDF already has outlines — skip if it does.
+        let doc = lopdf::Document::load(&source.path);
+        let needs_injection = match &doc {
+            Ok(d) => {
+                // Check for non-empty outlines: the /Outlines dict must have
+                // a /First child to be considered populated.
+                let has_real_outlines = d
+                    .trailer
+                    .get(b"Root")
+                    .ok()
+                    .and_then(|r| r.as_reference().ok())
+                    .and_then(|root_id| d.get_object(root_id).ok())
+                    .and_then(|obj| obj.as_dict().ok())
+                    .and_then(|cat| cat.get(b"Outlines").ok())
+                    .and_then(|o| o.as_reference().ok())
+                    .and_then(|oid| d.get_object(oid).ok())
+                    .and_then(|obj| obj.as_dict().ok())
+                    .and_then(|outlines| outlines.get(b"First").ok())
+                    .is_some();
+                !has_real_outlines
+            }
+            Err(_) => false,
+        };
+
+        if needs_injection {
+            if let Ok(mut doc) = doc {
+                let chapter_map: std::collections::BTreeMap<u32, String> = source
+                    .chapter_map
+                    .iter()
+                    .map(|(&k, v)| (k, v.clone()))
+                    .collect();
+                match crate::pdf::heuristics::inject_outlines(&mut doc, &chapter_map) {
+                    Ok(n) => {
+                        if let Err(e) = doc.save(&source.path) {
+                            println!(
+                                "[arcane] Warning: failed to save outlines to '{}': {e}",
+                                source.path.display()
+                            );
+                        } else {
+                            println!(
+                                "[arcane] Injected {n} outline entries into '{}'",
+                                source.title
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        println!(
+                            "[arcane] Warning: outline injection failed for '{}': {e}",
+                            source.title
+                        );
+                    }
+                }
+            }
         }
     }
 
