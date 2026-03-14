@@ -129,7 +129,10 @@ impl Report {
 
 impl Source for Report {
     fn chunk(&self, _chunks_dir: &std::path::Path) -> Result<()> {
-        tracing::info!("'{}' is a Report — chunking is not required.", self.meta.title);
+        tracing::info!(
+            "'{}' is a Report — chunking is not required.",
+            self.meta.title
+        );
         Ok(())
     }
 }

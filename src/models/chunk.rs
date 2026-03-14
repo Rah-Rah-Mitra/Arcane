@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 /// A record describing one chunk (chapter) extracted from a source.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct ChunkRecord {
     /// Human-readable chapter title.
     pub chapter_title: String,

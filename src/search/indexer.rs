@@ -94,7 +94,9 @@ impl SearchIndex {
         chapter_title: Option<&str>,
         pages: &[PageText],
     ) -> Result<u64> {
-        let mut writer = self.index.writer(50_000_000) // 50 MB heap
+        let mut writer = self
+            .index
+            .writer(50_000_000) // 50 MB heap
             .context("failed to create index writer")?;
 
         let source_id_field = self.schema.get_field(FIELD_SOURCE_ID).unwrap();
@@ -146,6 +148,7 @@ impl SearchIndex {
     }
 
     /// Return the index directory path.
+    #[allow(dead_code)]
     pub fn index_path(&self) -> Option<PathBuf> {
         // tantivy doesn't expose the directory path directly,
         // but the caller typically knows where they opened it.
@@ -172,14 +175,26 @@ mod tests {
         let idx = SearchIndex::open_in_memory().unwrap();
 
         let pages = vec![
-            PageText { page_index: 0, text: "Introduction to algorithms".into(), word_count: 3 },
-            PageText { page_index: 1, text: "Sorting and searching techniques".into(), word_count: 4 },
-            PageText { page_index: 2, text: "".into(), word_count: 0 }, // empty — should be skipped
+            PageText {
+                page_index: 0,
+                text: "Introduction to algorithms".into(),
+                word_count: 3,
+            },
+            PageText {
+                page_index: 1,
+                text: "Sorting and searching techniques".into(),
+                word_count: 4,
+            },
+            PageText {
+                page_index: 2,
+                text: "".into(),
+                word_count: 0,
+            }, // empty — should be skipped
         ];
 
-        let count = idx.index_source(
-            "src-001", "Algorithms", "CLRS", Some("Chapter 1"), &pages
-        ).unwrap();
+        let count = idx
+            .index_source("src-001", "Algorithms", "CLRS", Some("Chapter 1"), &pages)
+            .unwrap();
 
         assert_eq!(count, 2, "empty pages should be skipped");
     }

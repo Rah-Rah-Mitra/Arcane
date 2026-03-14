@@ -37,8 +37,8 @@ impl Project {
     pub fn add_source(&mut self, meta: SourceMeta) -> bool {
         let canonical = std::fs::canonicalize(&meta.path).unwrap_or_else(|_| meta.path.clone());
         for existing in &self.sources {
-            let ex_canonical = std::fs::canonicalize(&existing.path)
-                .unwrap_or_else(|_| existing.path.clone());
+            let ex_canonical =
+                std::fs::canonicalize(&existing.path).unwrap_or_else(|_| existing.path.clone());
             if ex_canonical == canonical {
                 return false;
             }

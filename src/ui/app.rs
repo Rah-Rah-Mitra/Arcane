@@ -72,9 +72,7 @@ impl AppState {
     pub fn select_next(&mut self) {
         match self.view {
             View::Projects => {
-                if !self.projects.is_empty()
-                    && self.selected_project < self.projects.len() - 1
-                {
+                if !self.projects.is_empty() && self.selected_project < self.projects.len() - 1 {
                     self.selected_project += 1;
                 }
             }
@@ -132,10 +130,7 @@ mod tests {
 
     #[test]
     fn state_machine_transitions() {
-        let projects = vec![
-            Project::new("Alpha"),
-            Project::new("Beta"),
-        ];
+        let projects = vec![Project::new("Alpha"), Project::new("Beta")];
         let mut state = AppState::new(projects);
 
         assert_eq!(state.view, View::Projects);

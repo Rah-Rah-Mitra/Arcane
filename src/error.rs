@@ -12,6 +12,7 @@ use thiserror::Error;
 
 /// Umbrella error that collects all domain-specific errors.
 #[derive(Error, Debug)]
+#[allow(dead_code)]
 pub enum ArcaneError {
     #[error("PDF processing error: {0}")]
     Pdf(#[from] PdfError),
@@ -34,6 +35,7 @@ pub enum ArcaneError {
 // ---------------------------------------------------------------------------
 
 #[derive(Error, Debug)]
+#[allow(dead_code)]
 pub enum PdfError {
     #[error("failed to open PDF at {path}: {source}")]
     OpenFailed { path: String, source: anyhow::Error },
@@ -75,6 +77,7 @@ pub enum StorageError {
     #[error("migration failed at version {version}: {reason}")]
     MigrationFailed { version: String, reason: String },
 
+    #[allow(dead_code)]
     #[error("serialization error: {0}")]
     Serialization(String),
 }
@@ -84,6 +87,7 @@ pub enum StorageError {
 // ---------------------------------------------------------------------------
 
 #[derive(Error, Debug)]
+#[allow(dead_code)]
 pub enum SearchError {
     #[error("index error: {0}")]
     IndexError(String),
@@ -97,6 +101,7 @@ pub enum SearchError {
 // ---------------------------------------------------------------------------
 
 #[derive(Error, Debug)]
+#[allow(dead_code)]
 pub enum WatcherError {
     #[error("watcher error: {0}")]
     WatchFailed(String),

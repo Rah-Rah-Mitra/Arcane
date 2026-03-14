@@ -28,13 +28,12 @@ pub fn cmd_list() -> Result<()> {
         };
         println!("  \u{2022} {}{}", p.name, tags);
         for s in &p.sources {
-            let kind = if s.needs_chunking { "textbook" } else { "report" };
-            println!(
-                "      {} ({}) \u{2014} {}",
-                s.title,
-                kind,
-                s.path.display()
-            );
+            let kind = if s.needs_chunking {
+                "textbook"
+            } else {
+                "report"
+            };
+            println!("      {} ({}) \u{2014} {}", s.title, kind, s.path.display());
         }
     }
     Ok(())
@@ -71,10 +70,7 @@ pub fn cmd_show(name: &str) -> Result<()> {
     }
     for s in &project.sources {
         println!("  \u{2022} {} \u{2014} {}", s.title, s.path.display());
-        println!(
-            "    needs_chunking = {}",
-            s.needs_chunking
-        );
+        println!("    needs_chunking = {}", s.needs_chunking);
         if let Some(sp) = s.start_page_physical {
             println!("    start_page_physical = {sp}");
         }
@@ -93,7 +89,8 @@ pub fn cmd_chunk(project_name: &str) -> Result<()> {
 
     // Each source gets its own subdirectory so multiple textbooks don't collide
     // and the idempotency guard works correctly per-source.
-    let results: Vec<Result<()>> = project.sources
+    let results: Vec<Result<()>> = project
+        .sources
         .par_iter()
         .map(|meta| {
             let chunks_dir = storage::filesystem::source_chunks_dir(project_name, &meta.title)?;
@@ -140,8 +137,8 @@ pub fn cmd_add(
         SourceMeta::report(title.clone(), path.clone())
     };
 
-    let chapter_map_json = serde_json::to_string(&meta.chapter_map)
-        .unwrap_or_else(|_| "{}".to_string());
+    let chapter_map_json =
+        serde_json::to_string(&meta.chapter_map).unwrap_or_else(|_| "{}".to_string());
 
     let mut store = ProjectStore::load()?;
 
@@ -171,24 +168,23 @@ pub fn cmd_add(
         }
 
         // Register blob in database.
-        let db = Database::open_or_create()
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let db = Database::open_or_create().map_err(|e| anyhow::anyhow!("{e}"))?;
         db.register_blob(
             &blob_ref.hash,
             blob_ref.size,
             &blob_ref.stored_path.to_string_lossy(),
-        ).map_err(|e| anyhow::anyhow!("{e}"))?;
+        )
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
 
         // Create symlink from Originals/ → CAS blob.
-        storage::filesystem::link_original_to_cas(
-            project_name,
-            &blob_ref.stored_path,
-            &path,
-        )?;
+        storage::filesystem::link_original_to_cas(project_name, &blob_ref.stored_path, &path)?;
 
         Some(blob_ref.hash)
     } else {
-        println!("[arcane] Warning: file '{}' not found on disk.", path.display());
+        println!(
+            "[arcane] Warning: file '{}' not found on disk.",
+            path.display()
+        );
         None
     };
 
@@ -196,19 +192,25 @@ pub fn cmd_add(
     {
         let project = store.get_mut(project_name).unwrap();
         if !project.add_source(meta) {
-            println!("[arcane] Source '{}' is already in project '{project_name}' — skipping.", title);
+            println!(
+                "[arcane] Source '{}' is already in project '{project_name}' — skipping.",
+                title
+            );
             return Ok(());
         }
     }
     store.save()?;
 
     // ── Also persist to SQLite database ──────────────────────────────────
-    let db = Database::open_or_create()
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let db = Database::open_or_create().map_err(|e| anyhow::anyhow!("{e}"))?;
 
     // Ensure project exists in DB too.
-    if !db.project_exists(project_name).map_err(|e| anyhow::anyhow!("{e}"))? {
-        db.create_project(project_name).map_err(|e| anyhow::anyhow!("{e}"))?;
+    if !db
+        .project_exists(project_name)
+        .map_err(|e| anyhow::anyhow!("{e}"))?
+    {
+        db.create_project(project_name)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
     }
 
     db.add_source(
@@ -220,7 +222,8 @@ pub fn cmd_add(
         is_textbook,
         start_page,
         &chapter_map_json,
-    ).map_err(|e| anyhow::anyhow!("{e}"))?;
+    )
+    .map_err(|e| anyhow::anyhow!("{e}"))?;
 
     // ── Apply tags to the project ───────────────────────────────────────
     if !tags.is_empty() {
@@ -284,11 +287,7 @@ pub fn cmd_rotate(
 ) -> Result<()> {
     let out = output.unwrap_or_else(|| input.clone());
     crate::pdf::ops::rotate(&input, &pages, degrees, &out)?;
-    println!(
-        "[arcane] Rotated {} → {}",
-        input.display(),
-        out.display()
-    );
+    println!("[arcane] Rotated {} → {}", input.display(), out.display());
     Ok(())
 }
 
@@ -309,9 +308,11 @@ pub fn cmd_tag(project_name: &str, tag: &str) -> Result<()> {
     }
 
     // SQLite store.
-    let db = Database::open_or_create()
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
-    if db.project_exists(project_name).map_err(|e| anyhow::anyhow!("{e}"))? {
+    let db = Database::open_or_create().map_err(|e| anyhow::anyhow!("{e}"))?;
+    if db
+        .project_exists(project_name)
+        .map_err(|e| anyhow::anyhow!("{e}"))?
+    {
         db.add_project_tag(project_name, tag)
             .map_err(|e| anyhow::anyhow!("{e}"))?;
     }
@@ -331,9 +332,11 @@ pub fn cmd_untag(project_name: &str, tag: &str) -> Result<()> {
     }
 
     // SQLite store.
-    let db = Database::open_or_create()
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
-    if db.project_exists(project_name).map_err(|e| anyhow::anyhow!("{e}"))? {
+    let db = Database::open_or_create().map_err(|e| anyhow::anyhow!("{e}"))?;
+    if db
+        .project_exists(project_name)
+        .map_err(|e| anyhow::anyhow!("{e}"))?
+    {
         db.remove_project_tag(project_name, tag)
             .map_err(|e| anyhow::anyhow!("{e}"))?;
     }
@@ -393,22 +396,14 @@ pub fn cmd_reindex() -> Result<()> {
 
             // Remove old entries for this source, then re-index.
             let _ = idx.remove_source(&source_id);
-            let count = idx.index_source(
-                &source_id,
-                &project.name,
-                &source.title,
-                None,
-                &pages,
-            )?;
+            let count = idx.index_source(&source_id, &project.name, &source.title, None, &pages)?;
 
             total_pages += count;
             total_sources += 1;
         }
     }
 
-    println!(
-        "[arcane] Reindexed {total_sources} source(s), {total_pages} page(s) total."
-    );
+    println!("[arcane] Reindexed {total_sources} source(s), {total_pages} page(s) total.");
     Ok(())
 }
 
@@ -419,22 +414,14 @@ pub fn cmd_reindex() -> Result<()> {
 pub fn cmd_protect(input: PathBuf, password: &str, output: Option<PathBuf>) -> Result<()> {
     let out = output.unwrap_or_else(|| input.clone());
     crate::pdf::ops::encrypt(&input, password, &out)?;
-    println!(
-        "[arcane] Encrypted {} → {}",
-        input.display(),
-        out.display()
-    );
+    println!("[arcane] Encrypted {} → {}", input.display(), out.display());
     Ok(())
 }
 
 pub fn cmd_unlock(input: PathBuf, password: &str, output: Option<PathBuf>) -> Result<()> {
     let out = output.unwrap_or_else(|| input.clone());
     crate::pdf::ops::decrypt(&input, password, &out)?;
-    println!(
-        "[arcane] Decrypted {} → {}",
-        input.display(),
-        out.display()
-    );
+    println!("[arcane] Decrypted {} → {}", input.display(), out.display());
     Ok(())
 }
 
@@ -458,9 +445,7 @@ pub fn cmd_watch(project_name: &str) -> Result<()> {
         anyhow::bail!("project '{project_name}' not found");
     }
 
-    println!(
-        "[arcane] Watching project '{project_name}' for new PDFs. Press Ctrl+C to stop."
-    );
+    println!("[arcane] Watching project '{project_name}' for new PDFs. Press Ctrl+C to stop.");
 
     let (tx, rx) = std::sync::mpsc::channel();
 
@@ -482,10 +467,7 @@ pub fn cmd_watch(project_name: &str) -> Result<()> {
                 // Auto-ingest into CAS.
                 match crate::storage::cas::ingest(&path) {
                     Ok(blob_ref) => {
-                        println!(
-                            "[arcane]   Stored in CAS (hash: {}…)",
-                            &blob_ref.hash[..12]
-                        );
+                        println!("[arcane]   Stored in CAS (hash: {}…)", &blob_ref.hash[..12]);
                     }
                     Err(e) => {
                         println!("[arcane]   CAS ingest failed: {e}");
@@ -512,9 +494,11 @@ fn parse_page_ranges(range_strs: &[String]) -> Result<Vec<(u32, u32)>> {
         let parts: Vec<&str> = s.split('-').collect();
         match parts.as_slice() {
             [start, end] => {
-                let s: u32 = start.parse()
+                let s: u32 = start
+                    .parse()
                     .with_context(|| format!("invalid page number in range '{s}'"))?;
-                let e: u32 = end.parse()
+                let e: u32 = end
+                    .parse()
                     .with_context(|| format!("invalid page number in range '{s}'"))?;
                 if s == 0 || e == 0 {
                     anyhow::bail!("page numbers must be >= 1 in range '{s}'");
@@ -526,7 +510,8 @@ fn parse_page_ranges(range_strs: &[String]) -> Result<Vec<(u32, u32)>> {
                 ranges.push((s - 1, e - 1));
             }
             [single] => {
-                let p: u32 = single.parse()
+                let p: u32 = single
+                    .parse()
                     .with_context(|| format!("invalid page number '{s}'"))?;
                 if p == 0 {
                     anyhow::bail!("page numbers must be >= 1");

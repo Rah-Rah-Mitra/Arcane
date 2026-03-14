@@ -30,8 +30,8 @@ pub fn merge(inputs: &[&Path], output_path: &Path) -> Result<()> {
     // Load all documents.
     let mut documents = Vec::new();
     for input in inputs {
-        let doc = Document::load(input)
-            .with_context(|| format!("failed to open {}", input.display()))?;
+        let doc =
+            Document::load(input).with_context(|| format!("failed to open {}", input.display()))?;
         documents.push(doc);
     }
 
@@ -49,7 +49,10 @@ pub fn merge(inputs: &[&Path], output_path: &Path) -> Result<()> {
                 // Add page object and its dependencies.
                 let new_id = merged.add_object(page_obj.clone());
                 // Insert the new page at the end.
-                if let Ok(pages_id) = merged.catalog().and_then(|c| c.get(b"Pages")?.as_reference()) {
+                if let Ok(pages_id) = merged
+                    .catalog()
+                    .and_then(|c| c.get(b"Pages")?.as_reference())
+                {
                     if let Ok(pages_obj) = merged.get_object_mut(pages_id) {
                         if let Ok(dict) = pages_obj.as_dict_mut() {
                             if let Ok(kids) = dict.get_mut(b"Kids") {
@@ -58,9 +61,7 @@ pub fn merge(inputs: &[&Path], output_path: &Path) -> Result<()> {
                                 }
                             }
                             // Update count.
-                            if let Ok(count) = dict.get(b"Count")
-                                .and_then(|o| o.as_i64())
-                            {
+                            if let Ok(count) = dict.get(b"Count").and_then(|o| o.as_i64()) {
                                 dict.set("Count", lopdf::Object::Integer(count + 1));
                             }
                         }
@@ -74,14 +75,11 @@ pub fn merge(inputs: &[&Path], output_path: &Path) -> Result<()> {
         fs::create_dir_all(parent)?;
     }
 
-    merged.save(output_path)
+    merged
+        .save(output_path)
         .with_context(|| format!("failed to save merged PDF to {}", output_path.display()))?;
 
-    tracing::info!(
-        "Merged {} files → {}",
-        inputs.len(),
-        output_path.display()
-    );
+    tracing::info!("Merged {} files → {}", inputs.len(), output_path.display());
 
     Ok(())
 }
@@ -94,11 +92,7 @@ pub fn merge(inputs: &[&Path], output_path: &Path) -> Result<()> {
 ///
 /// Each range is `(start, end)` where both are 0-based physical page indices
 /// (inclusive). Returns the list of output file paths.
-pub fn split(
-    input_path: &Path,
-    ranges: &[(u32, u32)],
-    output_dir: &Path,
-) -> Result<Vec<PathBuf>> {
+pub fn split(input_path: &Path, ranges: &[(u32, u32)], output_dir: &Path) -> Result<Vec<PathBuf>> {
     if ranges.is_empty() {
         bail!("split requires at least one page range");
     }
@@ -107,7 +101,8 @@ pub fn split(
         .with_context(|| format!("failed to open {}", input_path.display()))?;
 
     let total_pages = doc.get_pages().len() as u32;
-    let stem = input_path.file_stem()
+    let stem = input_path
+        .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("split");
 
@@ -117,9 +112,7 @@ pub fn split(
 
     for (idx, &(start, end)) in ranges.iter().enumerate() {
         if start >= total_pages || end >= total_pages {
-            bail!(
-                "page range {start}-{end} exceeds document length {total_pages}"
-            );
+            bail!("page range {start}-{end} exceeds document length {total_pages}");
         }
 
         let filename = format!("{stem}_pages_{}-{}.pdf", start + 1, end + 1);
@@ -135,10 +128,17 @@ pub fn split(
             .collect();
 
         chunk_doc.delete_pages(&pages_to_delete);
-        chunk_doc.save(&out_path)
+        chunk_doc
+            .save(&out_path)
             .with_context(|| format!("failed to save split chunk {}", out_path.display()))?;
 
-        tracing::info!("Split chunk {}: pages {}-{} → {}", idx + 1, start, end, out_path.display());
+        tracing::info!(
+            "Split chunk {}: pages {}-{} → {}",
+            idx + 1,
+            start,
+            end,
+            out_path.display()
+        );
         output_paths.push(out_path);
     }
 
@@ -153,12 +153,7 @@ pub fn split(
 ///
 /// If `pages` is empty, all pages are rotated. Output is written to
 /// `output_path`.
-pub fn rotate(
-    input_path: &Path,
-    pages: &[u32],
-    degrees: i32,
-    output_path: &Path,
-) -> Result<()> {
+pub fn rotate(input_path: &Path, pages: &[u32], degrees: i32, output_path: &Path) -> Result<()> {
     if degrees % 90 != 0 {
         bail!("rotation degrees must be a multiple of 90, got {degrees}");
     }
@@ -183,7 +178,8 @@ pub fn rotate(
 
         if let Ok(page_obj) = doc.get_object_mut(*page_id) {
             if let Ok(dict) = page_obj.as_dict_mut() {
-                let current_rotation = dict.get(b"Rotate")
+                let current_rotation = dict
+                    .get(b"Rotate")
                     .ok()
                     .and_then(|o| o.as_i64().ok())
                     .unwrap_or(0) as i32;
@@ -218,11 +214,7 @@ pub fn rotate(
 ///
 /// Uses lopdf's V1 encryption (40-bit RC4, PDF 1.4 compatible).
 /// The encrypted file is written to `output_path`.
-pub fn encrypt(
-    input_path: &Path,
-    password: &str,
-    output_path: &Path,
-) -> Result<()> {
+pub fn encrypt(input_path: &Path, password: &str, output_path: &Path) -> Result<()> {
     if password.is_empty() {
         bail!("password must not be empty");
     }
@@ -232,9 +224,8 @@ pub fn encrypt(
 
     use lopdf::encryption::{EncryptionVersion, Permissions};
 
-    let permissions = Permissions::PRINTABLE
-        | Permissions::COPYABLE
-        | Permissions::COPYABLE_FOR_ACCESSIBILITY;
+    let permissions =
+        Permissions::PRINTABLE | Permissions::COPYABLE | Permissions::COPYABLE_FOR_ACCESSIBILITY;
 
     let version = EncryptionVersion::V1 {
         document: &doc,
@@ -272,11 +263,7 @@ pub fn encrypt(
 /// Decrypt a password-protected PDF.
 ///
 /// The decrypted file is written to `output_path`.
-pub fn decrypt(
-    input_path: &Path,
-    password: &str,
-    output_path: &Path,
-) -> Result<()> {
+pub fn decrypt(input_path: &Path, password: &str, output_path: &Path) -> Result<()> {
     let mut doc = Document::load(input_path)
         .with_context(|| format!("failed to open {}", input_path.display()))?;
 
@@ -322,11 +309,7 @@ mod tests {
 
     #[test]
     fn encrypt_rejects_empty_password() {
-        let result = encrypt(
-            Path::new("/tmp/test.pdf"),
-            "",
-            Path::new("/tmp/out.pdf"),
-        );
+        let result = encrypt(Path::new("/tmp/test.pdf"), "", Path::new("/tmp/out.pdf"));
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("empty"));
     }

@@ -21,15 +21,13 @@ mod watcher;
 
 use clap::Parser;
 
-use cli::{Cli, Commands};
 use cli::commands;
+use cli::{Cli, Commands};
 
 fn main() -> anyhow::Result<()> {
     // Initialise structured logging.
     tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-        )
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .with_target(false)
         .init();
 
@@ -48,25 +46,42 @@ fn main() -> anyhow::Result<()> {
             title,
             tags,
             source_type,
-        } => commands::cmd_add(&project, path, textbook, start_page, title, tags, source_type),
+        } => commands::cmd_add(
+            &project,
+            path,
+            textbook,
+            start_page,
+            title,
+            tags,
+            source_type,
+        ),
         Commands::Merge { output, inputs } => commands::cmd_merge(output, inputs),
-        Commands::Split { input, output_dir, ranges } => {
-            commands::cmd_split(input, output_dir, ranges)
-        }
-        Commands::Rotate { input, degrees, output, pages } => {
-            commands::cmd_rotate(input, degrees, output, pages)
-        }
+        Commands::Split {
+            input,
+            output_dir,
+            ranges,
+        } => commands::cmd_split(input, output_dir, ranges),
+        Commands::Rotate {
+            input,
+            degrees,
+            output,
+            pages,
+        } => commands::cmd_rotate(input, degrees, output, pages),
         Commands::Tag { project, tag } => commands::cmd_tag(&project, &tag),
         Commands::Untag { project, tag } => commands::cmd_untag(&project, &tag),
         Commands::Search { query, limit } => commands::cmd_search(&query, limit),
         Commands::Reindex => commands::cmd_reindex(),
         Commands::Tui => commands::cmd_tui(),
         Commands::Watch { project } => commands::cmd_watch(&project),
-        Commands::Protect { input, password, output } => {
-            commands::cmd_protect(input, &password, output)
-        }
-        Commands::Unlock { input, password, output } => {
-            commands::cmd_unlock(input, &password, output)
-        }
+        Commands::Protect {
+            input,
+            password,
+            output,
+        } => commands::cmd_protect(input, &password, output),
+        Commands::Unlock {
+            input,
+            password,
+            output,
+        } => commands::cmd_unlock(input, &password, output),
     }
 }

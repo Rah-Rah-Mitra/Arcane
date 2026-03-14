@@ -34,7 +34,8 @@ pub fn hash_file(path: &Path) -> Result<(String, u64)> {
     let mut file = fs::File::open(path)
         .with_context(|| format!("cannot open file for hashing: {}", path.display()))?;
 
-    let metadata = file.metadata()
+    let metadata = file
+        .metadata()
         .with_context(|| format!("cannot read metadata: {}", path.display()))?;
     let size = metadata.len();
 
@@ -42,7 +43,8 @@ pub fn hash_file(path: &Path) -> Result<(String, u64)> {
     let mut buf = vec![0u8; 64 * 1024]; // 64 KiB read buffer
 
     loop {
-        let n = file.read(&mut buf)
+        let n = file
+            .read(&mut buf)
             .with_context(|| format!("read error while hashing {}", path.display()))?;
         if n == 0 {
             break;
@@ -86,12 +88,13 @@ pub fn ingest(source_path: &Path) -> Result<BlobRef> {
             fs::create_dir_all(parent)
                 .with_context(|| format!("cannot create CAS directory: {}", parent.display()))?;
         }
-        fs::copy(source_path, &target)
-            .with_context(|| format!(
+        fs::copy(source_path, &target).with_context(|| {
+            format!(
                 "cannot copy {} → {}",
                 source_path.display(),
                 target.display()
-            ))?;
+            )
+        })?;
         tracing::info!("Stored blob {hash} ({size} bytes) in CAS.");
         false
     };
@@ -156,7 +159,10 @@ mod tests {
         let (hash_a, _) = hash_file(&file_a).unwrap();
         let (hash_b, _) = hash_file(&file_b).unwrap();
 
-        assert_ne!(hash_a, hash_b, "different content must produce different hashes");
+        assert_ne!(
+            hash_a, hash_b,
+            "different content must produce different hashes"
+        );
     }
 
     #[test]

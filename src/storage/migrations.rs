@@ -8,9 +8,7 @@ use rusqlite::Connection;
 use crate::error::StorageError;
 
 /// Ordered list of migrations. Each entry is `(version_tag, sql)`.
-const MIGRATIONS: &[(&str, &str)] = &[
-    ("v1", include_str!("sql/v1_core.sql")),
-];
+const MIGRATIONS: &[(&str, &str)] = &[("v1", include_str!("sql/v1_core.sql"))];
 
 /// Run all pending migrations on the given database connection.
 pub fn run_pending(conn: &Connection) -> Result<(), StorageError> {
@@ -19,8 +17,9 @@ pub fn run_pending(conn: &Connection) -> Result<(), StorageError> {
         "CREATE TABLE IF NOT EXISTS schema_version (
             version TEXT PRIMARY KEY,
             applied_at TEXT NOT NULL DEFAULT (datetime('now'))
-        );"
-    ).map_err(StorageError::Database)?;
+        );",
+    )
+    .map_err(StorageError::Database)?;
 
     for (version, sql) in MIGRATIONS {
         let already_applied: bool = conn
@@ -36,15 +35,17 @@ pub fn run_pending(conn: &Connection) -> Result<(), StorageError> {
 
         tracing::info!("Applying migration {version}…");
 
-        conn.execute_batch(sql).map_err(|e| StorageError::MigrationFailed {
-            version: version.to_string(),
-            reason: e.to_string(),
-        })?;
+        conn.execute_batch(sql)
+            .map_err(|e| StorageError::MigrationFailed {
+                version: version.to_string(),
+                reason: e.to_string(),
+            })?;
 
         conn.execute(
             "INSERT INTO schema_version (version) VALUES (?1)",
             [version],
-        ).map_err(StorageError::Database)?;
+        )
+        .map_err(StorageError::Database)?;
     }
 
     Ok(())

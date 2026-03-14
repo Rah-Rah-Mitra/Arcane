@@ -14,7 +14,7 @@ pub fn render(frame: &mut Frame, state: &AppState) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3), // header
-            Constraint::Min(0),   // body
+            Constraint::Min(0),    // body
             Constraint::Length(1), // footer
         ])
         .split(frame.area());
@@ -26,7 +26,11 @@ pub fn render(frame: &mut Frame, state: &AppState) {
         View::Search => " Arcane — Search ",
     };
     let header = Paragraph::new(header_text)
-        .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+        .style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )
         .block(Block::default().borders(Borders::BOTTOM));
     frame.render_widget(header, chunks[0]);
 
@@ -43,8 +47,7 @@ pub fn render(frame: &mut Frame, state: &AppState) {
         View::Sources => "Esc: back  q: back",
         View::Search => "Type to search  Enter: run query  Esc: back",
     };
-    let footer = Paragraph::new(help)
-        .style(Style::default().fg(Color::DarkGray));
+    let footer = Paragraph::new(help).style(Style::default().fg(Color::DarkGray));
     frame.render_widget(footer, chunks[2]);
 }
 
@@ -59,14 +62,11 @@ fn render_projects(frame: &mut Frame, state: &AppState, area: ratatui::layout::R
             } else {
                 format!("  [{}]", p.tags.join(", "))
             };
-            let content = format!(
-                "{} ({} sources){}",
-                p.name,
-                p.sources.len(),
-                tags
-            );
+            let content = format!("{} ({} sources){}", p.name, p.sources.len(), tags);
             let style = if i == state.selected_project {
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
             };
@@ -74,8 +74,7 @@ fn render_projects(frame: &mut Frame, state: &AppState, area: ratatui::layout::R
         })
         .collect();
 
-    let list = List::new(items)
-        .block(Block::default().borders(Borders::ALL).title("Projects"));
+    let list = List::new(items).block(Block::default().borders(Borders::ALL).title("Projects"));
     frame.render_widget(list, area);
 }
 
@@ -88,7 +87,11 @@ fn render_sources(frame: &mut Frame, state: &AppState, area: ratatui::layout::Re
             .sources
             .iter()
             .map(|s| {
-                let kind = if s.needs_chunking { "textbook" } else { "report" };
+                let kind = if s.needs_chunking {
+                    "textbook"
+                } else {
+                    "report"
+                };
                 ListItem::new(format!("{} ({})", s.title, kind))
             })
             .collect(),
@@ -96,8 +99,7 @@ fn render_sources(frame: &mut Frame, state: &AppState, area: ratatui::layout::Re
     };
 
     let title = format!("Sources — {}", project_name);
-    let list = List::new(items)
-        .block(Block::default().borders(Borders::ALL).title(title));
+    let list = List::new(items).block(Block::default().borders(Borders::ALL).title(title));
     frame.render_widget(list, area);
 }
 
@@ -131,7 +133,9 @@ fn render_search(frame: &mut Frame, state: &AppState, area: ratatui::layout::Rec
                 r.score
             );
             let style = if i == state.selected_result {
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
             };
@@ -140,7 +144,6 @@ fn render_search(frame: &mut Frame, state: &AppState, area: ratatui::layout::Rec
         .collect();
 
     let results_title = format!("Results ({})", state.search_results.len());
-    let list = List::new(items)
-        .block(Block::default().borders(Borders::ALL).title(results_title));
+    let list = List::new(items).block(Block::default().borders(Borders::ALL).title(results_title));
     frame.render_widget(list, inner[1]);
 }
