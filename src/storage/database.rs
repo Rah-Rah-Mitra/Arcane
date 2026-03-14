@@ -373,8 +373,8 @@ impl Database {
         self.conn.execute(
             "INSERT INTO sources (id, project_id, title, original_path, blob_hash,
              source_type, needs_chunking, start_page_physical, chapter_map_json,
-             depth, page_count, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+             created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             rusqlite::params![
                 id,
                 project_id,
@@ -385,8 +385,6 @@ impl Database {
                 needs_chunking as i32,
                 start_page_physical.map(|v| v as i64),
                 chapter_map_json,
-                None::<i64>, // depth - initially None
-                None::<i64>, // page_count - initially None
                 now,
                 now
             ],
@@ -409,8 +407,7 @@ impl Database {
                 })?;
 
         let mut stmt = self.conn.prepare(
-            "SELECT title, original_path, needs_chunking, start_page_physical, chapter_map_json,
-             depth, page_count
+            "SELECT title, original_path, needs_chunking, start_page_physical, chapter_map_json
              FROM sources WHERE project_id = ?1",
         )?;
 
@@ -421,25 +418,13 @@ impl Database {
                 let needs_chunking: i32 = row.get(2)?;
                 let start_page: Option<i64> = row.get(3)?;
                 let chapter_json: String = row.get(4)?;
-                let depth: Option<i64> = row.get(5)?;
-                let page_count: Option<i64> = row.get(6)?;
 
-                Ok((
-                    title,
-                    path_str,
-                    needs_chunking,
-                    start_page,
-                    chapter_json,
-                    depth,
-                    page_count,
-                ))
+                Ok((title, path_str, needs_chunking, start_page, chapter_json))
             })?
             .collect::<Result<Vec<_>, _>>()?;
 
         let mut result = Vec::new();
-        for (title, path_str, needs_chunking, start_page, chapter_json, depth, page_count) in
-            sources
-        {
+        for (title, path_str, needs_chunking, start_page, chapter_json) in sources {
             let chapter_map: std::collections::HashMap<u32, String> =
                 serde_json::from_str(&chapter_json).unwrap_or_default();
 
@@ -449,8 +434,6 @@ impl Database {
                 needs_chunking: needs_chunking != 0,
                 chapter_map,
                 start_page_physical: start_page.map(|v| v as u32),
-                depth: depth.map(|v| v as u32),
-                page_count: page_count.map(|v| v as u32),
             };
             result.push(meta);
         }
