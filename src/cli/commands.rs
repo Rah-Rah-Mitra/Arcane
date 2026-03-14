@@ -195,7 +195,10 @@ pub fn cmd_add(
     // ── Persist to legacy JSON store ─────────────────────────────────────
     {
         let project = store.get_mut(project_name).unwrap();
-        project.add_source(meta);
+        if !project.add_source(meta) {
+            println!("[arcane] Source '{}' is already in project '{project_name}' — skipping.", title);
+            return Ok(());
+        }
     }
     store.save()?;
 

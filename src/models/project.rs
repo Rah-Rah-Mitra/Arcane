@@ -31,8 +31,20 @@ impl Project {
     }
 
     /// Add a source to the project.
-    pub fn add_source(&mut self, meta: SourceMeta) {
+    ///
+    /// Returns `false` (and does not insert) if a source with the same
+    /// canonical path is already present.
+    pub fn add_source(&mut self, meta: SourceMeta) -> bool {
+        let canonical = std::fs::canonicalize(&meta.path).unwrap_or_else(|_| meta.path.clone());
+        for existing in &self.sources {
+            let ex_canonical = std::fs::canonicalize(&existing.path)
+                .unwrap_or_else(|_| existing.path.clone());
+            if ex_canonical == canonical {
+                return false;
+            }
+        }
         self.sources.push(meta);
+        true
     }
 }
 
@@ -52,7 +64,7 @@ mod tests {
         assert_eq!(p.sources.len(), 0);
 
         let meta = SourceMeta::report("CLRS", PathBuf::from("/tmp/clrs.pdf"));
-        p.add_source(meta);
+        assert!(p.add_source(meta));
         assert_eq!(p.sources.len(), 1);
         assert!(!p.sources[0].needs_chunking);
     }
