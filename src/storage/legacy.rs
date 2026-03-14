@@ -1,17 +1,10 @@
-//! Storage layer for Arcane.
+//! Legacy JSON storage — preserved for migration from v0.1 `projects.json`.
 //!
-//! Projects are persisted as `~/Arcane/projects.json`.  The module exposes a
-//! simple [`ProjectStore`] that loads, queries, and saves the list of projects.
+//! This module contains the original `ProjectStore` that reads/writes
+//! `~/Arcane/projects.json`.  It is kept for two purposes:
 //!
-//! File-system layout managed here:
-//! ```
-//! ~/Arcane/
-//!   projects.json
-//!   Library/
-//!     [Project_Name]/
-//!       Originals/    ← symlinks or copies of the original PDFs
-//!       Chunks/       ← split chapter PDFs
-//! ```
+//! 1. One-time migration from JSON to the new SQLite database.
+//! 2. Backward-compatible usage during the transition period.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -20,60 +13,10 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::models::Project;
+use crate::storage::filesystem::arcane_root;
 
 // ---------------------------------------------------------------------------
-// Root paths
-// ---------------------------------------------------------------------------
-
-/// Returns `~/Arcane` (creates it if it does not yet exist).
-pub fn arcane_root() -> Result<PathBuf> {
-    let home = dirs_home()?;
-    let root = home.join("Arcane");
-    fs::create_dir_all(&root)
-        .with_context(|| format!("failed to create Arcane root at {}", root.display()))?;
-    Ok(root)
-}
-
-/// Returns `~/Arcane/Library/[project_name]`.
-pub fn project_dir(project_name: &str) -> Result<PathBuf> {
-    let dir = arcane_root()?.join("Library").join(project_name);
-    Ok(dir)
-}
-
-/// Returns `~/Arcane/Library/[project_name]/Originals` (created on demand).
-pub fn originals_dir(project_name: &str) -> Result<PathBuf> {
-    let dir = project_dir(project_name)?.join("Originals");
-    fs::create_dir_all(&dir)
-        .with_context(|| format!("failed to create Originals directory for '{project_name}'"))?;
-    Ok(dir)
-}
-
-/// Returns `~/Arcane/Library/[project_name]/Chunks` (created on demand).
-pub fn chunks_dir(project_name: &str) -> Result<PathBuf> {
-    let dir = project_dir(project_name)?.join("Chunks");
-    fs::create_dir_all(&dir)
-        .with_context(|| format!("failed to create Chunks directory for '{project_name}'"))?;
-    Ok(dir)
-}
-
-// ---------------------------------------------------------------------------
-// Portable home-directory helper (no extra dependency)
-// ---------------------------------------------------------------------------
-
-fn dirs_home() -> Result<PathBuf> {
-    // Prefer the HOME environment variable (works on Linux / macOS / WSL).
-    if let Some(h) = std::env::var_os("HOME") {
-        return Ok(PathBuf::from(h));
-    }
-    // Windows fallback.
-    if let Some(h) = std::env::var_os("USERPROFILE") {
-        return Ok(PathBuf::from(h));
-    }
-    anyhow::bail!("cannot determine home directory — neither HOME nor USERPROFILE is set")
-}
-
-// ---------------------------------------------------------------------------
-// ProjectStore
+// StoreData
 // ---------------------------------------------------------------------------
 
 /// The on-disk envelope that wraps the list of all projects.
@@ -81,6 +24,10 @@ fn dirs_home() -> Result<PathBuf> {
 struct StoreData {
     projects: Vec<Project>,
 }
+
+// ---------------------------------------------------------------------------
+// ProjectStore
+// ---------------------------------------------------------------------------
 
 /// A loaded view of `projects.json` that can be mutated and flushed.
 pub struct ProjectStore {
@@ -158,44 +105,53 @@ impl ProjectStore {
 }
 
 // ---------------------------------------------------------------------------
-// Symlink helper
+// Migration helper
 // ---------------------------------------------------------------------------
 
-/// Create a symlink in `originals_dir` pointing at the original PDF.
-/// On platforms where symlinks are unavailable the file is copied instead.
-pub fn link_original(project_name: &str, source_path: &Path) -> Result<PathBuf> {
-    let target_dir = originals_dir(project_name)?;
-    let file_name = source_path
-        .file_name()
-        .context("source path has no file name")?;
-    let link_path = target_dir.join(file_name);
+/// Migrate `projects.json` into the database if it exists and the database
+/// is empty.  The JSON file is renamed to `projects.json.migrated` after a
+/// successful migration.
+pub fn migrate_if_needed(db: &crate::storage::Database) -> Result<()> {
+    let root = arcane_root()?;
+    let json_path = root.join("projects.json");
 
-    if link_path.exists() {
-        return Ok(link_path);
+    if !json_path.exists() {
+        return Ok(());
     }
 
-    #[cfg(unix)]
-    {
-        std::os::unix::fs::symlink(source_path, &link_path).with_context(|| {
-            format!(
-                "failed to create symlink {} → {}",
-                link_path.display(),
-                source_path.display()
-            )
-        })?;
-    }
-    #[cfg(not(unix))]
-    {
-        fs::copy(source_path, &link_path).with_context(|| {
-            format!(
-                "failed to copy {} → {}",
-                source_path.display(),
-                link_path.display()
-            )
-        })?;
+    // Only migrate if the database has no projects yet.
+    let projects = db.list_projects()
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    if !projects.is_empty() {
+        return Ok(());
     }
 
-    Ok(link_path)
+    tracing::info!("Migrating projects.json → arcane.db…");
+
+    let store = ProjectStore::load_from(&json_path)?;
+
+    for project in store.projects() {
+        db.create_project(&project.name)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+        for tag in &project.tags {
+            db.add_project_tag(&project.name, tag)
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+        }
+        // Note: source migration will be expanded in Phase 2 when CAS is available.
+    }
+
+    // Rename the old file to indicate migration is complete.
+    let migrated_path = root.join("projects.json.migrated");
+    fs::rename(&json_path, &migrated_path)
+        .with_context(|| "failed to rename projects.json after migration")?;
+
+    tracing::info!(
+        "Migration complete — {} project(s) imported. Old file renamed to projects.json.migrated.",
+        store.projects().len()
+    );
+
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

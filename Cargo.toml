@@ -1,6 +1,6 @@
 [package]
 name = "arcane"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "A local-first research archival application for managing Projects and Sources"
 authors = ["Arcane Contributors"]
@@ -14,12 +14,43 @@ path = "src/main.rs"
 # PDF manipulation — extract PageLabels, Outlines, and split documents
 lopdf = "0.39.0"
 
-# Serialisation / deserialisation for projects.json
+# Serialisation / deserialisation
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
-# Ergonomic error handling
+# Error handling
 anyhow = "1.0"
+thiserror = "2.0"
+
+# CLI framework
+clap = { version = "4.5", features = ["derive"] }
+
+# Storage — embedded SQLite (compiled from source, no system dependency)
+rusqlite = { version = "0.33", features = ["bundled"] }
+
+# Structured logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Full-text search
+tantivy = "0.22"
+
+# Content-addressable hashing
+blake3 = "1"
+
+# Parallel processing
+rayon = "1.10"
+
+# TUI
+ratatui = "0.29"
+crossterm = "0.28"
+
+# File watching
+notify = "7"
+
+# Utilities
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
 
 [dev-dependencies]
 tempfile = "3"
