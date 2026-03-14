@@ -38,6 +38,16 @@ pub struct SourceMeta {
     /// allows the engine to compute `offset = physical - logical`.
     #[serde(default)]
     pub start_page_physical: Option<u32>,
+
+    /// Outline extraction depth used during the last chunking operation.
+    /// `None` if never chunked, or if chunked without using outlines.
+    #[serde(default)]
+    pub depth: Option<u32>,
+
+    /// Total page count of the source PDF.
+    /// `None` if not yet determined.
+    #[serde(default)]
+    pub page_count: Option<u32>,
 }
 
 impl SourceMeta {
@@ -49,6 +59,8 @@ impl SourceMeta {
             needs_chunking: false,
             chapter_map: HashMap::new(),
             start_page_physical: None,
+            depth: None,
+            page_count: None,
         }
     }
 
@@ -65,6 +77,8 @@ impl SourceMeta {
             needs_chunking: true,
             chapter_map,
             start_page_physical,
+            depth: None,
+            page_count: None,
         }
     }
 }
@@ -82,7 +96,9 @@ pub trait Source {
     ///
     /// Implementations are **idempotent**: if the chunks directory is already
     /// populated they should return early without re-processing.
-    fn chunk(&self, chunks_dir: &std::path::Path, depth: u32) -> Result<()>;
+    ///
+    /// Returns `(page_count, chunk_count)` on success.
+    fn chunk(&self, chunks_dir: &std::path::Path, depth: u32) -> Result<(u32, usize)>;
 
     /// Placeholder for future YouTube transcript / video-lecture integration.
     #[allow(dead_code)]
@@ -109,7 +125,7 @@ impl Textbook {
 }
 
 impl Source for Textbook {
-    fn chunk(&self, chunks_dir: &std::path::Path, depth: u32) -> Result<()> {
+    fn chunk(&self, chunks_dir: &std::path::Path, depth: u32) -> Result<(u32, usize)> {
         crate::pdf::engine::chunk_pdf(&self.meta, chunks_dir, depth)
     }
 }
@@ -131,12 +147,14 @@ impl Report {
 }
 
 impl Source for Report {
-    fn chunk(&self, _chunks_dir: &std::path::Path, _depth: u32) -> Result<()> {
+    fn chunk(&self, _chunks_dir: &std::path::Path, _depth: u32) -> Result<(u32, usize)> {
         tracing::info!(
             "'{}' is a Report — chunking is not required.",
             self.meta.title
         );
-        Ok(())
+        // For reports, we return 0 page count and 0 chunks since they don't get chunked
+        // The caller can handle getting actual page count if needed
+        Ok((0, 0))
     }
 }
 
