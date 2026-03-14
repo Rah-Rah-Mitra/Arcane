@@ -64,9 +64,7 @@ fn main() -> anyhow::Result<()> {
             commands::cmd_list_chunks(&project, source.as_deref())
         }
         Commands::Outline { file, depth } => commands::cmd_outline(file, depth),
-        Commands::Remove { project, source } => {
-            commands::cmd_remove(&project, source.as_deref())
-        }
+        Commands::Remove { project, source } => commands::cmd_remove(&project, source.as_deref()),
         Commands::Merge { output, inputs } => commands::cmd_merge(output, inputs),
         Commands::Split {
             input,
