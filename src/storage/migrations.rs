@@ -8,10 +8,7 @@ use rusqlite::Connection;
 use crate::error::StorageError;
 
 /// Ordered list of migrations. Each entry is `(version_tag, sql)`.
-const MIGRATIONS: &[(&str, &str)] = &[
-    ("v1", include_str!("sql/v1_core.sql")),
-    ("v2", include_str!("sql/v2_add_depth_pagecount.sql")),
-];
+const MIGRATIONS: &[(&str, &str)] = &[("v1", include_str!("sql/v1_core.sql"))];
 
 /// Run all pending migrations on the given database connection.
 pub fn run_pending(conn: &Connection) -> Result<(), StorageError> {
