@@ -97,7 +97,7 @@ Chapter PDFs are written to `~/Arcane/Library/<Project>/Chunks/<Source>/`.
 | Command | Description |
 |---------|-------------|
 | `arcane new <project>` | Create a new project |
-| `arcane add <project> <file> [--textbook] [--start-page N] [--title "…"] [--tag T] [--type T]` | Add a source |
+| `arcane add <project> <file> [--textbook] [--start-page N] [--title "…"]` | Add a source |
 | `arcane chunk <project> [--force] [--depth N] [--dry-run]` | Split textbooks into chapter PDFs |
 | `arcane list` | List all projects and their sources |
 | `arcane list-chunks <project> [source]` | List chunk files for a source |

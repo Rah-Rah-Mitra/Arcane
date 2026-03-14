@@ -184,8 +184,6 @@ Adds a PDF source to a project.
 - `--textbook`: Mark the source as a textbook that needs chunking
 - `--start-page N`: Physical page index where printed Page 1 starts (for textbooks with front matter)
 - `--title T`: Override the display title (defaults to filename)
-- `--tag T`: Add tags to the project (can be repeated to add multiple tags)
-- `--type T`: Specify the source type (textbook, report, paper, cheatsheet, or custom string)
 
 **Examples:**
 
@@ -207,17 +205,6 @@ arcane add "Algorithms" ~/Books/book.pdf --textbook --start-page 15
 Add with a custom title:
 ```bash
 arcane add "Algorithms" ~/Books/book.pdf --textbook --title "Algorithms Textbook 2023"
-```
-
-Add with tags:
-```bash
-arcane add "Algorithms" ~/Books/book.pdf --textbook --tag "advanced" --tag "graduate-level"
-```
-
-Add with a specific source type:
-```bash
-arcane add "Machine Learning" ~/Papers/neural-nets.pdf --type "paper"
-arcane add "Algorithms" ~/Docs/quick-ref.pdf --type "cheatsheet"
 ```
 
 **Note:** If the project doesn't exist, it will be created automatically.

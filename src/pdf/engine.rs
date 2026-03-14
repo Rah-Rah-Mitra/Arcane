@@ -72,14 +72,32 @@ fn resolve_chapters(meta: &SourceMeta, doc: &Document, depth: u32) -> BTreeMap<u
 ///
 /// The function is **idempotent**: if `chunks_dir` already contains `.pdf`
 /// files it returns early without re-processing.
-pub fn chunk_pdf(meta: &SourceMeta, chunks_dir: &Path, depth: u32) -> anyhow::Result<()> {
+///
+/// Returns `(page_count, chunk_count)` on success.
+pub fn chunk_pdf(meta: &SourceMeta, chunks_dir: &Path, depth: u32) -> anyhow::Result<(u32, usize)> {
     // ── Idempotency guard ────────────────────────────────────────────────────
     if is_already_chunked(chunks_dir)? {
         tracing::info!(
             "Chunks directory '{}' is already populated — skipping.",
             chunks_dir.display()
         );
-        return Ok(());
+        // When already chunked, we don't know the exact count, so return a placeholder
+        // The caller should handle this case appropriately
+        let chunk_count = fs::read_dir(chunks_dir)?
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.path()
+                    .extension()
+                    .and_then(|x| x.to_str())
+                    .map(|x| x.eq_ignore_ascii_case("pdf"))
+                    .unwrap_or(false)
+            })
+            .count();
+        // For page count, we need to load the document to get it
+        let doc = Document::load(&meta.path)
+            .with_context(|| format!("failed to open PDF at {}", meta.path.display()))?;
+        let total_pages = doc.get_pages().len() as u32;
+        return Ok((total_pages, chunk_count));
     }
 
     tracing::info!("Loading PDF '{}'…", meta.path.display());
@@ -114,7 +132,8 @@ pub fn chunk_pdf(meta: &SourceMeta, chunks_dir: &Path, depth: u32) -> anyhow::Re
         .par_iter()
         .filter_map(|(idx, start, end, title)| {
             let safe_title = sanitise_filename(title);
-            let filename = format!("{:02}_{}.pdf", idx + 1, safe_title);
+            // Include depth in filename to distinguish chunks created with different depths
+            let filename = format!("d{}_{}_{}.pdf", depth, idx + 1, safe_title);
             let out_path = chunks_dir.join(&filename);
             tracing::info!("Writing chunk {filename} (pages {start}–{end})…");
             write_chunk(&doc, *start, *end, &out_path).err()
@@ -126,7 +145,7 @@ pub fn chunk_pdf(meta: &SourceMeta, chunks_dir: &Path, depth: u32) -> anyhow::Re
     }
 
     tracing::info!("Done — {} chunk(s) written.", write_jobs.len());
-    Ok(())
+    Ok((total_pages, write_jobs.len()))
 }
 
 // ---------------------------------------------------------------------------

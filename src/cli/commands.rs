@@ -77,15 +77,41 @@ pub fn cmd_show(name: &str) -> Result<()> {
         if !s.chapter_map.is_empty() {
             println!("    chapter_map = {} entries", s.chapter_map.len());
         }
+        if let Some(depth) = s.depth {
+            println!("    depth = {depth}");
+        }
+        if let Some(page_count) = s.page_count {
+            println!("    page_count = {page_count}");
+        }
+        // Count chunks if they exist
+        if s.needs_chunking {
+            let chunks_dir = storage::filesystem::source_chunks_dir(name, &s.title)?;
+            if chunks_dir.exists() {
+                let chunk_count = std::fs::read_dir(&chunks_dir)?
+                    .filter_map(|e| e.ok())
+                    .filter(|e| {
+                        e.path()
+                            .extension()
+                            .and_then(|x| x.to_str())
+                            .map(|x| x.eq_ignore_ascii_case("pdf"))
+                            .unwrap_or(false)
+                    })
+                    .count();
+                if chunk_count > 0 {
+                    println!("    chunks = {chunk_count}");
+                }
+            }
+        }
     }
     Ok(())
 }
 
 pub fn cmd_chunk(project_name: &str, force: bool, depth: u32, dry_run: bool) -> Result<()> {
-    let store = ProjectStore::load()?;
-    let project = store
+    let mut store = ProjectStore::load()?;
+    let mut project = store
         .get(project_name)
-        .with_context(|| format!("project '{project_name}' not found"))?;
+        .with_context(|| format!("project '{project_name}' not found"))?
+        .clone();
 
     // ── Dry-run: show detected boundaries without writing files ──────────
     if dry_run {
@@ -117,10 +143,11 @@ pub fn cmd_chunk(project_name: &str, force: bool, depth: u32, dry_run: bool) -> 
 
     // Each source gets its own subdirectory so multiple textbooks don't collide
     // and the idempotency guard works correctly per-source.
-    let results: Vec<Result<()>> = project
+    let results: Vec<Result<(usize, u32, usize)>> = project
         .sources
         .par_iter()
-        .map(|meta| {
+        .enumerate()
+        .map(|(idx, meta)| {
             let chunks_dir = storage::filesystem::source_chunks_dir(project_name, &meta.title)?;
 
             // When --force is set, remove existing chunks so they get regenerated.
@@ -130,13 +157,27 @@ pub fn cmd_chunk(project_name: &str, force: bool, depth: u32, dry_run: bool) -> 
             }
 
             let source = build_source(meta.clone());
-            source.chunk(&chunks_dir, depth)
+            let (page_count, chunk_count) = source.chunk(&chunks_dir, depth)?;
+            Ok((idx, page_count, chunk_count))
         })
         .collect();
 
-    // Report any errors.
+    // Update metadata for each source that was chunked.
+    let mut needs_update = false;
     for result in results {
-        result?;
+        let (idx, page_count, _chunk_count) = result?;
+        let source = &mut project.sources[idx];
+        if source.needs_chunking {
+            source.depth = Some(depth);
+            source.page_count = Some(page_count);
+            needs_update = true;
+        }
+    }
+
+    // Save the updated project if any metadata changed.
+    if needs_update {
+        store.upsert(project);
+        store.save()?;
     }
 
     Ok(())
