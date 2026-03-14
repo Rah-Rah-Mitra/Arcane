@@ -502,8 +502,7 @@ pub fn cmd_recover_outline(
         .with_context(|| format!("failed to open PDF at {}", file.display()))?;
 
     // Build headings.
-    let headings =
-        heuristics::extract_headings(&doc, min_font_ratio as f32, depth);
+    let headings = heuristics::extract_headings(&doc, min_font_ratio as f32, depth);
 
     if headings.is_empty() {
         println!(
@@ -535,8 +534,8 @@ pub fn cmd_recover_outline(
     let mut doc = Document::load(&file)
         .with_context(|| format!("failed to re-open PDF at {}", file.display()))?;
 
-    let n = heuristics::inject_outlines(&mut doc, &chapter_map)
-        .context("failed to inject outlines")?;
+    let n =
+        heuristics::inject_outlines(&mut doc, &chapter_map).context("failed to inject outlines")?;
 
     doc.save(&out_path)
         .with_context(|| format!("failed to save PDF to {}", out_path.display()))?;
@@ -545,7 +544,9 @@ pub fn cmd_recover_outline(
         "[arcane] Injected {n} outline entries → {}",
         out_path.display()
     );
-    println!("[arcane] You can now re-chunk with: arcane chunk <project> --source \"<title>\" --force");
+    println!(
+        "[arcane] You can now re-chunk with: arcane chunk <project> --source \"<title>\" --force"
+    );
 
     Ok(())
 }

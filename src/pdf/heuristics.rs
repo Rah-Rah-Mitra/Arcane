@@ -122,11 +122,7 @@ pub fn dominant_body_size(histogram: &BTreeMap<u16, u64>) -> Option<f32> {
 /// `min_ratio` — font sizes ≥ `body_size × min_ratio` are considered headings.
 /// `max_depth` — generate candidates for up to this many heading levels
 ///   (level 1 = largest; level 2 = slightly smaller, etc.).
-pub fn extract_headings(
-    doc: &Document,
-    min_ratio: f32,
-    max_depth: u32,
-) -> Vec<HeadingCandidate> {
+pub fn extract_headings(doc: &Document, min_ratio: f32, max_depth: u32) -> Vec<HeadingCandidate> {
     let histogram = match build_font_histogram(doc) {
         Some(h) => h,
         None => return vec![],
@@ -226,12 +222,7 @@ pub fn extract_headings(
                         }
                     } else {
                         // Body-text operator — flush any pending heading.
-                        flush(
-                            &mut acc_page,
-                            &mut acc_size,
-                            &mut acc_text,
-                            &mut candidates,
-                        );
+                        flush(&mut acc_page, &mut acc_size, &mut acc_text, &mut candidates);
                     }
                 }
                 "TJ" => {
@@ -262,34 +253,19 @@ pub fn extract_headings(
                             }
                         }
                     } else {
-                        flush(
-                            &mut acc_page,
-                            &mut acc_size,
-                            &mut acc_text,
-                            &mut candidates,
-                        );
+                        flush(&mut acc_page, &mut acc_size, &mut acc_text, &mut candidates);
                     }
                 }
                 // BT/ET reset context — flush on ET.
                 "ET" => {
-                    flush(
-                        &mut acc_page,
-                        &mut acc_size,
-                        &mut acc_text,
-                        &mut candidates,
-                    );
+                    flush(&mut acc_page, &mut acc_size, &mut acc_text, &mut candidates);
                 }
                 _ => {}
             }
         }
 
         // Flush at end of page.
-        flush(
-            &mut acc_page,
-            &mut acc_size,
-            &mut acc_text,
-            &mut candidates,
-        );
+        flush(&mut acc_page, &mut acc_size, &mut acc_text, &mut candidates);
     }
 
     // Post-filter: only keep headings whose text looks like a chapter/section
@@ -299,7 +275,10 @@ pub fn extract_headings(
         .filter(|c| {
             let t = c.text.trim();
             // Must be non-trivial (more than 1 character, not just a number).
-            t.len() > 1 && !t.chars().all(|ch| ch.is_numeric() || ch == '.' || ch == ' ')
+            t.len() > 1
+                && !t
+                    .chars()
+                    .all(|ch| ch.is_numeric() || ch == '.' || ch == ' ')
         })
         .collect()
 }
@@ -332,10 +311,7 @@ pub fn headings_to_chapter_map(headings: &[HeadingCandidate]) -> BTreeMap<u32, S
 ///
 /// If the document already has an `/Outlines` entry it is overwritten.
 /// Returns the number of outline entries written.
-pub fn inject_outlines(
-    doc: &mut Document,
-    chapters: &BTreeMap<u32, String>,
-) -> Result<usize> {
+pub fn inject_outlines(doc: &mut Document, chapters: &BTreeMap<u32, String>) -> Result<usize> {
     if chapters.is_empty() {
         anyhow::bail!("no chapters to inject");
     }
@@ -351,9 +327,7 @@ pub fn inject_outlines(
     let entries: Vec<(ObjectId, String)> = chapters
         .iter()
         .filter_map(|(&page_idx, title)| {
-            page_oid_map
-                .get(&page_idx)
-                .map(|&oid| (oid, title.clone()))
+            page_oid_map.get(&page_idx).map(|&oid| (oid, title.clone()))
         })
         .collect();
 
@@ -434,10 +408,7 @@ fn get_page_content_bytes(doc: &Document, page_oid: ObjectId) -> Option<Vec<u8>>
 
     let stream_ids: Vec<ObjectId> = match contents {
         Object::Reference(r) => vec![*r],
-        Object::Array(refs) => refs
-            .iter()
-            .filter_map(|o| o.as_reference().ok())
-            .collect(),
+        Object::Array(refs) => refs.iter().filter_map(|o| o.as_reference().ok()).collect(),
         _ => return None,
     };
 
@@ -564,8 +535,8 @@ mod tests {
     fn dominant_body_size_picks_most_frequent() {
         let mut h = BTreeMap::new();
         h.insert(120u16, 10_000u64); // 12pt – most frequent → body
-        h.insert(180u16, 50u64);     // 18pt – heading
-        h.insert(140u16, 200u64);    // 14pt – subheading
+        h.insert(180u16, 50u64); // 18pt – heading
+        h.insert(140u16, 200u64); // 14pt – subheading
         assert_eq!(dominant_body_size(&h), Some(12.0));
     }
 }
