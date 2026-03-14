@@ -25,9 +25,9 @@ use anyhow::{bail, Context, Result};
 use lopdf::{Document, Object};
 use rayon::prelude::*;
 
-use crate::models::SourceMeta;
 use super::outlines::extract_chapters_from_outlines;
 use super::page_labels::extract_chapters_from_page_labels;
+use crate::models::SourceMeta;
 
 // ---------------------------------------------------------------------------
 // Public entry-point
@@ -61,7 +61,10 @@ pub fn chunk_pdf(meta: &SourceMeta, chunks_dir: &Path) -> anyhow::Result<()> {
     // BTreeMap<physical_start_index (0-based), chapter_title>
     let chapters: BTreeMap<u32, String> = if !meta.chapter_map.is_empty() {
         // The user provided an explicit mapping — use it directly.
-        meta.chapter_map.iter().map(|(&k, v)| (k, v.clone())).collect()
+        meta.chapter_map
+            .iter()
+            .map(|(&k, v)| (k, v.clone()))
+            .collect()
     } else {
         // Try automatic detection.
         extract_chapters_from_outlines(&doc)
@@ -178,8 +181,8 @@ pub(crate) fn boundaries_to_ranges(
 /// This means a 30-page chapter copies ~30 page objects + their resources
 /// rather than all objects in the full document.
 fn write_chunk(doc: &Document, start: u32, end: u32, out_path: &Path) -> Result<()> {
-    use std::collections::{HashMap, HashSet, VecDeque};
     use lopdf::{Dictionary, Object, ObjectId};
+    use std::collections::{HashMap, HashSet, VecDeque};
 
     let first = start + 1; // lopdf page numbers are 1-based
     let last = end + 1;
@@ -241,7 +244,10 @@ fn write_chunk(doc: &Document, start: u32, end: u32, out_path: &Path) -> Result<
         .filter_map(|old_id| id_map.get(old_id).copied())
         .collect();
 
-    let kids: Vec<Object> = new_page_ids.iter().map(|&id| Object::Reference(id)).collect();
+    let kids: Vec<Object> = new_page_ids
+        .iter()
+        .map(|&id| Object::Reference(id))
+        .collect();
     let count = new_page_ids.len() as i64;
 
     let pages_id = new_doc.add_object(Object::Dictionary({
@@ -395,7 +401,11 @@ fn decode_pdf_bytes(bytes: &[u8]) -> String {
 
 pub(crate) fn pdf_string_to_string_opt(obj: &Object) -> Option<String> {
     let s = pdf_string_to_string(obj);
-    if s.is_empty() { None } else { Some(s) }
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
 }
 
 /// Replace characters that are problematic in file names.

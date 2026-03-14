@@ -14,6 +14,7 @@ use lopdf::Document;
 
 /// Text content extracted from a single PDF page.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct PageText {
     /// 0-based physical page index.
     pub page_index: u32,
@@ -33,7 +34,7 @@ pub fn extract_all(path: &Path) -> Result<Vec<PageText>> {
     let pages = doc.get_pages();
     let mut result = Vec::with_capacity(pages.len());
 
-    for (&page_num, _) in &pages {
+    for &page_num in pages.keys() {
         let text = doc.extract_text(&[page_num]).unwrap_or_default();
         let word_count = text.split_whitespace().count();
 
@@ -51,9 +52,10 @@ pub fn extract_all(path: &Path) -> Result<Vec<PageText>> {
 }
 
 /// Extract text from a specific range of pages (0-based, inclusive).
+#[allow(dead_code)]
 pub fn extract_range(path: &Path, start: u32, end: u32) -> Result<String> {
-    let doc = Document::load(path)
-        .with_context(|| format!("failed to open PDF: {}", path.display()))?;
+    let doc =
+        Document::load(path).with_context(|| format!("failed to open PDF: {}", path.display()))?;
 
     // lopdf uses 1-based page numbers.
     let page_nums: Vec<u32> = ((start + 1)..=(end + 1)).collect();

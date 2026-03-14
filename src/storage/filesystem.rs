@@ -64,8 +64,9 @@ pub fn source_chunks_dir(project_name: &str, source_title: &str) -> Result<PathB
         .collect();
     let safe = safe.trim().replace("  ", " ");
     let dir = chunks_dir(project_name)?.join(safe);
-    fs::create_dir_all(&dir)
-        .with_context(|| format!("failed to create source chunks directory for '{source_title}'"))?;
+    fs::create_dir_all(&dir).with_context(|| {
+        format!("failed to create source chunks directory for '{source_title}'")
+    })?;
     Ok(dir)
 }
 
@@ -91,6 +92,7 @@ pub(crate) fn dirs_home() -> Result<PathBuf> {
 
 /// Create a symlink in `originals_dir` pointing at the original PDF.
 /// On platforms where symlinks are unavailable the file is copied instead.
+#[allow(dead_code)]
 pub fn link_original(project_name: &str, source_path: &Path) -> Result<PathBuf> {
     let target_dir = originals_dir(project_name)?;
     let file_name = source_path
@@ -141,13 +143,8 @@ fn create_link_or_copy(source: &Path, link: &Path) -> Result<()> {
     }
     #[cfg(not(unix))]
     {
-        fs::copy(source, link).with_context(|| {
-            format!(
-                "failed to copy {} → {}",
-                source.display(),
-                link.display()
-            )
-        })?;
+        fs::copy(source, link)
+            .with_context(|| format!("failed to copy {} → {}", source.display(), link.display()))?;
     }
     Ok(())
 }

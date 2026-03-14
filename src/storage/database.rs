@@ -19,9 +19,8 @@ impl Database {
     /// Open (or create) the Arcane database at `~/Arcane/arcane.db` and run
     /// any pending migrations.
     pub fn open_or_create() -> Result<Self, StorageError> {
-        let root = filesystem::arcane_root().map_err(|e| {
-            StorageError::Filesystem(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
-        })?;
+        let root = filesystem::arcane_root()
+            .map_err(|e| StorageError::Filesystem(std::io::Error::other(e.to_string())))?;
         let db_path = root.join("arcane.db");
         Self::open_at(&db_path)
     }
@@ -48,6 +47,7 @@ impl Database {
     }
 
     /// Get a reference to the underlying connection.
+    #[allow(dead_code)]
     pub fn conn(&self) -> &Connection {
         &self.conn
     }
@@ -68,15 +68,18 @@ impl Database {
     }
 
     /// List all projects (without sources — use `get_project` for full detail).
+    #[allow(dead_code)]
     pub fn list_projects(&self) -> Result<Vec<Project>, StorageError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT name FROM projects ORDER BY name"
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT name FROM projects ORDER BY name")?;
 
-        let projects = stmt.query_map([], |row| {
-            let name: String = row.get(0)?;
-            Ok(Project::new(name))
-        })?.collect::<Result<Vec<_>, _>>()?;
+        let projects = stmt
+            .query_map([], |row| {
+                let name: String = row.get(0)?;
+                Ok(Project::new(name))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
 
         // Populate tags for each project.
         let mut result = Vec::new();
@@ -100,7 +103,9 @@ impl Database {
 
     /// Get the project UUID by name.
     pub fn get_project_id(&self, name: &str) -> Result<Option<String>, StorageError> {
-        let mut stmt = self.conn.prepare("SELECT id FROM projects WHERE name = ?1")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id FROM projects WHERE name = ?1")?;
         let mut rows = stmt.query([name])?;
         match rows.next()? {
             Some(row) => Ok(Some(row.get(0)?)),
@@ -111,24 +116,25 @@ impl Database {
     /// Delete a project by name. Returns true if it existed.
     #[allow(dead_code)]
     pub fn delete_project(&self, name: &str) -> Result<bool, StorageError> {
-        let affected = self.conn.execute(
-            "DELETE FROM projects WHERE name = ?1",
-            [name],
-        )?;
+        let affected = self
+            .conn
+            .execute("DELETE FROM projects WHERE name = ?1", [name])?;
         Ok(affected > 0)
     }
 
     // ── Tag operations ───────────────────────────────────────────────────
 
     /// Get all tags for a project.
+    #[allow(dead_code)]
     pub fn get_project_tags(&self, project_name: &str) -> Result<Vec<String>, StorageError> {
         let mut stmt = self.conn.prepare(
             "SELECT pt.tag FROM project_tags pt
              JOIN projects p ON pt.project_id = p.id
              WHERE p.name = ?1
-             ORDER BY pt.tag"
+             ORDER BY pt.tag",
         )?;
-        let tags = stmt.query_map([project_name], |row| row.get(0))?
+        let tags = stmt
+            .query_map([project_name], |row| row.get(0))?
             .collect::<Result<Vec<String>, _>>()?;
         Ok(tags)
     }
@@ -136,8 +142,11 @@ impl Database {
     /// Add a tag to a project.
     #[allow(dead_code)]
     pub fn add_project_tag(&self, project_name: &str, tag: &str) -> Result<(), StorageError> {
-        let project_id = self.get_project_id(project_name)?
-            .ok_or_else(|| StorageError::ProjectNotFound { name: project_name.to_string() })?;
+        let project_id =
+            self.get_project_id(project_name)?
+                .ok_or_else(|| StorageError::ProjectNotFound {
+                    name: project_name.to_string(),
+                })?;
 
         self.conn.execute(
             "INSERT OR IGNORE INTO project_tags (project_id, tag) VALUES (?1, ?2)",
@@ -149,8 +158,11 @@ impl Database {
     /// Remove a tag from a project.
     #[allow(dead_code)]
     pub fn remove_project_tag(&self, project_name: &str, tag: &str) -> Result<bool, StorageError> {
-        let project_id = self.get_project_id(project_name)?
-            .ok_or_else(|| StorageError::ProjectNotFound { name: project_name.to_string() })?;
+        let project_id =
+            self.get_project_id(project_name)?
+                .ok_or_else(|| StorageError::ProjectNotFound {
+                    name: project_name.to_string(),
+                })?;
 
         let affected = self.conn.execute(
             "DELETE FROM project_tags WHERE project_id = ?1 AND tag = ?2",
@@ -166,9 +178,10 @@ impl Database {
             "SELECT p.name FROM projects p
              JOIN project_tags pt ON pt.project_id = p.id
              WHERE pt.tag = ?1
-             ORDER BY p.name"
+             ORDER BY p.name",
         )?;
-        let names = stmt.query_map([tag], |row| row.get(0))?
+        let names = stmt
+            .query_map([tag], |row| row.get(0))?
             .collect::<Result<Vec<String>, _>>()?;
         Ok(names)
     }
@@ -181,7 +194,8 @@ impl Database {
         source_title: &str,
         tag: &str,
     ) -> Result<(), StorageError> {
-        let source_id = self.get_source_id(project_name, source_title)?
+        let source_id = self
+            .get_source_id(project_name, source_title)?
             .ok_or_else(|| StorageError::SourceNotFound {
                 title: source_title.to_string(),
                 project: project_name.to_string(),
@@ -201,16 +215,18 @@ impl Database {
         project_name: &str,
         source_title: &str,
     ) -> Result<Vec<String>, StorageError> {
-        let source_id = self.get_source_id(project_name, source_title)?
+        let source_id = self
+            .get_source_id(project_name, source_title)?
             .ok_or_else(|| StorageError::SourceNotFound {
                 title: source_title.to_string(),
                 project: project_name.to_string(),
             })?;
 
-        let mut stmt = self.conn.prepare(
-            "SELECT tag FROM source_tags WHERE source_id = ?1 ORDER BY tag"
-        )?;
-        let tags = stmt.query_map([&source_id], |row| row.get(0))?
+        let mut stmt = self
+            .conn
+            .prepare("SELECT tag FROM source_tags WHERE source_id = ?1 ORDER BY tag")?;
+        let tags = stmt
+            .query_map([&source_id], |row| row.get(0))?
             .collect::<Result<Vec<String>, _>>()?;
         Ok(tags)
     }
@@ -221,12 +237,15 @@ impl Database {
         project_name: &str,
         source_title: &str,
     ) -> Result<Option<String>, StorageError> {
-        let project_id = self.get_project_id(project_name)?
-            .ok_or_else(|| StorageError::ProjectNotFound { name: project_name.to_string() })?;
+        let project_id =
+            self.get_project_id(project_name)?
+                .ok_or_else(|| StorageError::ProjectNotFound {
+                    name: project_name.to_string(),
+                })?;
 
-        let mut stmt = self.conn.prepare(
-            "SELECT id FROM sources WHERE project_id = ?1 AND title = ?2"
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id FROM sources WHERE project_id = ?1 AND title = ?2")?;
         let mut rows = stmt.query(rusqlite::params![project_id, source_title])?;
         match rows.next()? {
             Some(row) => Ok(Some(row.get(0)?)),
@@ -254,6 +273,7 @@ impl Database {
     }
 
     /// Check whether a blob with the given hash exists in the database.
+    #[allow(dead_code)]
     pub fn blob_exists(&self, hash: &str) -> Result<bool, StorageError> {
         let count: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM blobs WHERE blake3_hash = ?1",
@@ -266,9 +286,9 @@ impl Database {
     /// Get the stored path of a blob by its hash.
     #[allow(dead_code)]
     pub fn get_blob_path(&self, hash: &str) -> Result<Option<String>, StorageError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT stored_path FROM blobs WHERE blake3_hash = ?1"
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT stored_path FROM blobs WHERE blake3_hash = ?1")?;
         let mut rows = stmt.query([hash])?;
         match rows.next()? {
             Some(row) => Ok(Some(row.get(0)?)),
@@ -279,6 +299,7 @@ impl Database {
     // ── Source operations ─────────────────────────────────────────────────
 
     /// Add a source to a project. Returns the generated source UUID.
+    #[allow(clippy::too_many_arguments)]
     pub fn add_source(
         &self,
         project_name: &str,
@@ -290,8 +311,11 @@ impl Database {
         start_page_physical: Option<u32>,
         chapter_map_json: &str,
     ) -> Result<String, StorageError> {
-        let project_id = self.get_project_id(project_name)?
-            .ok_or_else(|| StorageError::ProjectNotFound { name: project_name.to_string() })?;
+        let project_id =
+            self.get_project_id(project_name)?
+                .ok_or_else(|| StorageError::ProjectNotFound {
+                    name: project_name.to_string(),
+                })?;
 
         let id = uuid::Uuid::new_v4().to_string();
         let now = chrono::Utc::now().to_rfc3339();
@@ -302,10 +326,17 @@ impl Database {
              created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             rusqlite::params![
-                id, project_id, title, original_path, blob_hash,
-                source_type, needs_chunking as i32,
+                id,
+                project_id,
+                title,
+                original_path,
+                blob_hash,
+                source_type,
+                needs_chunking as i32,
                 start_page_physical.map(|v| v as i64),
-                chapter_map_json, now, now
+                chapter_map_json,
+                now,
+                now
             ],
         )?;
 
@@ -314,24 +345,33 @@ impl Database {
 
     /// Get all sources for a project, returned as `SourceMeta` for backward
     /// compatibility with the chunking pipeline.
-    pub fn get_sources(&self, project_name: &str) -> Result<Vec<crate::models::SourceMeta>, StorageError> {
-        let project_id = self.get_project_id(project_name)?
-            .ok_or_else(|| StorageError::ProjectNotFound { name: project_name.to_string() })?;
+    #[allow(dead_code)]
+    pub fn get_sources(
+        &self,
+        project_name: &str,
+    ) -> Result<Vec<crate::models::SourceMeta>, StorageError> {
+        let project_id =
+            self.get_project_id(project_name)?
+                .ok_or_else(|| StorageError::ProjectNotFound {
+                    name: project_name.to_string(),
+                })?;
 
         let mut stmt = self.conn.prepare(
             "SELECT title, original_path, needs_chunking, start_page_physical, chapter_map_json
-             FROM sources WHERE project_id = ?1"
+             FROM sources WHERE project_id = ?1",
         )?;
 
-        let sources = stmt.query_map([&project_id], |row| {
-            let title: String = row.get(0)?;
-            let path_str: String = row.get(1)?;
-            let needs_chunking: i32 = row.get(2)?;
-            let start_page: Option<i64> = row.get(3)?;
-            let chapter_json: String = row.get(4)?;
+        let sources = stmt
+            .query_map([&project_id], |row| {
+                let title: String = row.get(0)?;
+                let path_str: String = row.get(1)?;
+                let needs_chunking: i32 = row.get(2)?;
+                let start_page: Option<i64> = row.get(3)?;
+                let chapter_json: String = row.get(4)?;
 
-            Ok((title, path_str, needs_chunking, start_page, chapter_json))
-        })?.collect::<Result<Vec<_>, _>>()?;
+                Ok((title, path_str, needs_chunking, start_page, chapter_json))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
 
         let mut result = Vec::new();
         for (title, path_str, needs_chunking, start_page, chapter_json) in sources {
@@ -448,13 +488,23 @@ mod tests {
         db.create_project("Physics").unwrap();
 
         db.add_source(
-            "Physics", "QM Textbook", "/path/to/qm.pdf",
-            None, "Textbook", true, None, "{}",
-        ).unwrap();
+            "Physics",
+            "QM Textbook",
+            "/path/to/qm.pdf",
+            None,
+            "Textbook",
+            true,
+            None,
+            "{}",
+        )
+        .unwrap();
 
-        db.add_source_tag("Physics", "QM Textbook", "quantum").unwrap();
-        db.add_source_tag("Physics", "QM Textbook", "advanced").unwrap();
-        db.add_source_tag("Physics", "QM Textbook", "quantum").unwrap(); // dup
+        db.add_source_tag("Physics", "QM Textbook", "quantum")
+            .unwrap();
+        db.add_source_tag("Physics", "QM Textbook", "advanced")
+            .unwrap();
+        db.add_source_tag("Physics", "QM Textbook", "quantum")
+            .unwrap(); // dup
 
         let tags = db.get_source_tags("Physics", "QM Textbook").unwrap();
         assert_eq!(tags, vec!["advanced", "quantum"]);
@@ -467,11 +517,13 @@ mod tests {
         let hash = "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890";
         assert!(!db.blob_exists(hash).unwrap());
 
-        db.register_blob(hash, 1024, "/cas/ab/abcdef.../blob").unwrap();
+        db.register_blob(hash, 1024, "/cas/ab/abcdef.../blob")
+            .unwrap();
         assert!(db.blob_exists(hash).unwrap());
 
         // Idempotent — second insert is ignored
-        db.register_blob(hash, 1024, "/cas/ab/abcdef.../blob").unwrap();
+        db.register_blob(hash, 1024, "/cas/ab/abcdef.../blob")
+            .unwrap();
         assert!(db.blob_exists(hash).unwrap());
 
         let path = db.get_blob_path(hash).unwrap();
@@ -485,7 +537,8 @@ mod tests {
 
         // Register the blob first to satisfy the FK constraint.
         let blob_hash = "deadbeef1234567890abcdef1234567890abcdef1234567890abcdef12345678";
-        db.register_blob(blob_hash, 5000, "/cas/de/deadbeef.../blob").unwrap();
+        db.register_blob(blob_hash, 5000, "/cas/de/deadbeef.../blob")
+            .unwrap();
 
         db.add_source(
             "Physics",
@@ -496,7 +549,8 @@ mod tests {
             true,
             Some(14),
             r#"{"0":"Front Matter","14":"Chapter 1"}"#,
-        ).unwrap();
+        )
+        .unwrap();
 
         db.add_source(
             "Physics",
@@ -507,7 +561,8 @@ mod tests {
             false,
             None,
             "{}",
-        ).unwrap();
+        )
+        .unwrap();
 
         let sources = db.get_sources("Physics").unwrap();
         assert_eq!(sources.len(), 2);

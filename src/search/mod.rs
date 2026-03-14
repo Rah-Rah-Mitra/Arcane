@@ -7,4 +7,4 @@ pub mod indexer;
 pub mod query;
 
 pub use indexer::SearchIndex;
-pub use query::{SearchResult, search};
+pub use query::{search, SearchResult};

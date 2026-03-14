@@ -4,9 +4,11 @@ use serde::{Deserialize, Serialize};
 
 /// The kind of source document. Replaces the old boolean-only `needs_chunking`
 /// dispatch with a richer taxonomy.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[allow(dead_code)]
 pub enum SourceKind {
     Textbook,
+    #[default]
     Report,
     Paper,
     Cheatsheet,
@@ -22,11 +24,5 @@ impl std::fmt::Display for SourceKind {
             Self::Cheatsheet => write!(f, "Cheatsheet"),
             Self::Custom(s) => write!(f, "{s}"),
         }
-    }
-}
-
-impl Default for SourceKind {
-    fn default() -> Self {
-        Self::Report
     }
 }

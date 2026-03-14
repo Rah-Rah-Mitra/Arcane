@@ -88,7 +88,12 @@ impl ProjectStore {
 
     /// Insert or replace a project (matched by name).
     pub fn upsert(&mut self, project: Project) {
-        if let Some(existing) = self.data.projects.iter_mut().find(|p| p.name == project.name) {
+        if let Some(existing) = self
+            .data
+            .projects
+            .iter_mut()
+            .find(|p| p.name == project.name)
+        {
             *existing = project;
         } else {
             self.data.projects.push(project);
@@ -111,6 +116,7 @@ impl ProjectStore {
 /// Migrate `projects.json` into the database if it exists and the database
 /// is empty.  The JSON file is renamed to `projects.json.migrated` after a
 /// successful migration.
+#[allow(dead_code)]
 pub fn migrate_if_needed(db: &crate::storage::Database) -> Result<()> {
     let root = arcane_root()?;
     let json_path = root.join("projects.json");
@@ -120,8 +126,7 @@ pub fn migrate_if_needed(db: &crate::storage::Database) -> Result<()> {
     }
 
     // Only migrate if the database has no projects yet.
-    let projects = db.list_projects()
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let projects = db.list_projects().map_err(|e| anyhow::anyhow!("{e}"))?;
     if !projects.is_empty() {
         return Ok(());
     }

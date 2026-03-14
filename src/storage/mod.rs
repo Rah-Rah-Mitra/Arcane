@@ -10,5 +10,5 @@ pub mod legacy;
 pub mod migrations;
 
 pub use database::Database;
-pub use filesystem::{arcane_root, project_dir, originals_dir, chunks_dir, link_original};
+pub use filesystem::{chunks_dir, originals_dir};
 pub use legacy::ProjectStore;

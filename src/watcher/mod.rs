@@ -14,6 +14,7 @@ use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 
 /// Events emitted by the file watcher.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum WatchEvent {
     /// A new PDF was created or moved into a watched directory.
     NewPdf {
@@ -34,10 +35,7 @@ pub enum WatchEvent {
 
 /// Watch a project's Originals directory and run the callback for each event.
 /// Blocks until an error occurs or the sender is dropped.
-pub fn watch_project(
-    project_name: &str,
-    event_tx: mpsc::Sender<WatchEvent>,
-) -> Result<()> {
+pub fn watch_project(project_name: &str, event_tx: mpsc::Sender<WatchEvent>) -> Result<()> {
     let originals = crate::storage::originals_dir(project_name)?;
     watch_directory(&originals, project_name, event_tx)
 }
@@ -50,8 +48,8 @@ pub fn watch_directory(
 ) -> Result<()> {
     let (tx, rx) = mpsc::channel();
 
-    let mut watcher = RecommendedWatcher::new(tx, Config::default())
-        .context("failed to create file watcher")?;
+    let mut watcher =
+        RecommendedWatcher::new(tx, Config::default()).context("failed to create file watcher")?;
 
     watcher
         .watch(dir, RecursiveMode::NonRecursive)
@@ -112,17 +110,15 @@ mod tests {
         let mut found_pdf_event = false;
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         while std::time::Instant::now() < deadline {
-            if let Ok(event) = rx.recv_timeout(Duration::from_millis(100)) {
-                match &event {
-                    WatchEvent::NewPdf { project_name, path }
-                    | WatchEvent::Modified { project_name, path } => {
-                        assert_eq!(project_name, "TestProject");
-                        if path.to_string_lossy().contains("test.pdf") {
-                            found_pdf_event = true;
-                            break;
-                        }
-                    }
-                    _ => {}
+            if let Ok(
+                WatchEvent::NewPdf { project_name, path }
+                | WatchEvent::Modified { project_name, path },
+            ) = rx.recv_timeout(Duration::from_millis(100)).as_ref()
+            {
+                assert_eq!(project_name, "TestProject");
+                if path.to_string_lossy().contains("test.pdf") {
+                    found_pdf_event = true;
+                    break;
                 }
             }
         }

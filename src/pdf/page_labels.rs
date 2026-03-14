@@ -39,6 +39,7 @@ pub enum LabelStyle {
 
 /// A single PageLabel range as defined by PDF spec.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct PageLabelRange {
     /// 0-based physical page index where this labelling rule begins.
     pub physical_start: u32,
@@ -51,6 +52,7 @@ pub struct PageLabelRange {
 }
 
 /// Resolver that maps between physical (0-based) and logical page identifiers.
+#[allow(dead_code)]
 pub struct PageLabelResolver {
     /// Sorted by `physical_start` ascending.
     ranges: Vec<PageLabelRange>,
@@ -79,7 +81,10 @@ impl PageLabelResolver {
             bail!("no usable entries in /PageLabels");
         }
 
-        Ok(Self { ranges, total_pages })
+        Ok(Self {
+            ranges,
+            total_pages,
+        })
     }
 
     fn extract_nums_array(doc: &Document, labels_obj: &Object) -> Result<Vec<Object>> {
@@ -114,11 +119,15 @@ impl PageLabelResolver {
 
             let (style, prefix, logical_start) = match &nums[i + 1] {
                 Object::Dictionary(d) => {
-                    let style = d.get(b"S").ok().and_then(|o| Self::parse_style(o));
-                    let prefix = d.get(b"P").ok()
-                        .and_then(|o| pdf_string_to_string_opt(o))
+                    let style = d.get(b"S").ok().and_then(Self::parse_style);
+                    let prefix = d
+                        .get(b"P")
+                        .ok()
+                        .and_then(pdf_string_to_string_opt)
                         .unwrap_or_default();
-                    let logical_start = d.get(b"St").ok()
+                    let logical_start = d
+                        .get(b"St")
+                        .ok()
                         .and_then(|o| match o {
                             Object::Integer(n) => Some(*n as u32),
                             _ => None,
@@ -162,6 +171,7 @@ impl PageLabelResolver {
 // Resolution methods
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 impl PageLabelResolver {
     /// Given a 0-based physical page index, return the human-readable label.
     pub fn physical_to_label(&self, physical: u32) -> String {
@@ -238,7 +248,8 @@ impl PageLabelResolver {
 
     /// Return the 0-based physical page index where Arabic "page 1" begins.
     pub fn content_start(&self) -> Option<u32> {
-        self.ranges.iter()
+        self.ranges
+            .iter()
             .find(|r| r.style == Some(LabelStyle::Decimal) && r.logical_start == 1)
             .map(|r| r.physical_start)
     }
@@ -267,7 +278,9 @@ impl PageLabelResolver {
     /// Find the range that covers the given physical page.
     fn range_for_physical(&self, physical: u32) -> &PageLabelRange {
         // Binary search for the last range with physical_start <= physical.
-        let idx = self.ranges.partition_point(|r| r.physical_start <= physical);
+        let idx = self
+            .ranges
+            .partition_point(|r| r.physical_start <= physical);
         if idx == 0 {
             &self.ranges[0]
         } else {
@@ -277,7 +290,9 @@ impl PageLabelResolver {
 
     /// Return the last physical page covered by this range.
     fn range_end(&self, range: &PageLabelRange) -> u32 {
-        let idx = self.ranges.iter()
+        let idx = self
+            .ranges
+            .iter()
             .position(|r| r.physical_start == range.physical_start)
             .unwrap();
         if idx + 1 < self.ranges.len() {
@@ -292,11 +307,22 @@ impl PageLabelResolver {
 // Roman numeral conversion
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 fn to_roman(mut n: u32) -> String {
     const TABLE: &[(u32, &str)] = &[
-        (1000, "M"), (900, "CM"), (500, "D"), (400, "CD"),
-        (100, "C"), (90, "XC"), (50, "L"), (40, "XL"),
-        (10, "X"), (9, "IX"), (5, "V"), (4, "IV"), (1, "I"),
+        (1000, "M"),
+        (900, "CM"),
+        (500, "D"),
+        (400, "CD"),
+        (100, "C"),
+        (90, "XC"),
+        (50, "L"),
+        (40, "XL"),
+        (10, "X"),
+        (9, "IX"),
+        (5, "V"),
+        (4, "IV"),
+        (1, "I"),
     ];
     let mut result = String::new();
     for &(value, numeral) in TABLE {
@@ -308,11 +334,17 @@ fn to_roman(mut n: u32) -> String {
     result
 }
 
+#[allow(dead_code)]
 fn from_roman(s: &str) -> Option<u32> {
     let roman_val = |c: char| -> Option<u32> {
         match c {
-            'I' => Some(1), 'V' => Some(5), 'X' => Some(10), 'L' => Some(50),
-            'C' => Some(100), 'D' => Some(500), 'M' => Some(1000),
+            'I' => Some(1),
+            'V' => Some(5),
+            'X' => Some(10),
+            'L' => Some(50),
+            'C' => Some(100),
+            'D' => Some(500),
+            'M' => Some(1000),
             _ => None,
         }
     };
@@ -330,13 +362,18 @@ fn from_roman(s: &str) -> Option<u32> {
         prev = val;
     }
 
-    if total == 0 { None } else { Some(total) }
+    if total == 0 {
+        None
+    } else {
+        Some(total)
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Alpha conversion
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 fn to_alpha(n: u32) -> String {
     if n == 0 {
         return String::new();
@@ -345,6 +382,7 @@ fn to_alpha(n: u32) -> String {
     String::from(c as char)
 }
 
+#[allow(dead_code)]
 fn from_alpha(s: &str) -> Option<u32> {
     if s.len() != 1 {
         return None;

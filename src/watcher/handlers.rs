@@ -1,6 +1,6 @@
 //! Event classification and handling for file watcher events.
 
-use std::path::PathBuf;
+use std::path::Path;
 
 use notify::EventKind;
 
@@ -43,7 +43,7 @@ pub fn classify_event(event: &notify::Event, project_name: &str) -> Vec<WatchEve
 }
 
 /// Check if a path has a `.pdf` extension (case-insensitive).
-fn is_pdf(path: &PathBuf) -> bool {
+fn is_pdf(path: &Path) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
         .map(|ext| ext.eq_ignore_ascii_case("pdf"))
@@ -57,8 +57,9 @@ fn is_pdf(path: &PathBuf) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use notify::Event;
     use notify::event::CreateKind;
+    use notify::Event;
+    use std::path::PathBuf;
 
     #[test]
     fn classify_create_pdf() {
