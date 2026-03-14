@@ -42,7 +42,8 @@ fn main() -> anyhow::Result<()> {
             force,
             depth,
             dry_run,
-        } => commands::cmd_chunk(&project, force, depth, dry_run),
+            source,
+        } => commands::cmd_chunk(&project, force, depth, dry_run, source.as_deref()),
         Commands::Add {
             project,
             path,

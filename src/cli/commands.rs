@@ -106,16 +106,40 @@ pub fn cmd_show(name: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn cmd_chunk(project_name: &str, force: bool, depth: u32, dry_run: bool) -> Result<()> {
+pub fn cmd_chunk(
+    project_name: &str,
+    force: bool,
+    depth: u32,
+    dry_run: bool,
+    source_filter: Option<&str>,
+) -> Result<()> {
     let mut store = ProjectStore::load()?;
     let mut project = store
         .get(project_name)
         .with_context(|| format!("project '{project_name}' not found"))?
         .clone();
 
+    // Determine which source indices to process.
+    let target_indices: Vec<usize> = if let Some(title) = source_filter {
+        let indices: Vec<usize> = project
+            .sources
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.title == title)
+            .map(|(i, _)| i)
+            .collect();
+        if indices.is_empty() {
+            anyhow::bail!("source '{title}' not found in project '{project_name}'");
+        }
+        indices
+    } else {
+        (0..project.sources.len()).collect()
+    };
+
     // ── Dry-run: show detected boundaries without writing files ──────────
     if dry_run {
-        for meta in &project.sources {
+        for &idx in &target_indices {
+            let meta = &project.sources[idx];
             if !meta.needs_chunking {
                 continue;
             }
@@ -143,10 +167,13 @@ pub fn cmd_chunk(project_name: &str, force: bool, depth: u32, dry_run: bool) -> 
 
     // Each source gets its own subdirectory so multiple textbooks don't collide
     // and the idempotency guard works correctly per-source.
-    let results: Vec<Result<(usize, u32, usize)>> = project
-        .sources
+    let targets: Vec<(usize, SourceMeta)> = target_indices
+        .iter()
+        .map(|&i| (i, project.sources[i].clone()))
+        .collect();
+
+    let results: Vec<Result<(usize, u32, usize)>> = targets
         .par_iter()
-        .enumerate()
         .map(|(idx, meta)| {
             let chunks_dir = storage::filesystem::source_chunks_dir(project_name, &meta.title)?;
 
@@ -158,7 +185,7 @@ pub fn cmd_chunk(project_name: &str, force: bool, depth: u32, dry_run: bool) -> 
 
             let source = build_source(meta.clone());
             let (page_count, chunk_count) = source.chunk(&chunks_dir, depth)?;
-            Ok((idx, page_count, chunk_count))
+            Ok((*idx, page_count, chunk_count))
         })
         .collect();
 

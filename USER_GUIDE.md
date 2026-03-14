@@ -112,9 +112,9 @@ arcane chunk "Algorithms"
 Arcane will:
 1. Read the PDF's outline/bookmarks or page labels
 2. Extract chapter boundaries
-3. Create individual PDF files for each chapter in `~/Arcane/Library/Algorithms/Chunks/`
+3. Create individual PDF files for each chapter in `~/Arcane/Library/Algorithms/Chunks/<Source Title>/`
 
-The files will be named like: `01_Introduction.pdf`, `02_Getting_Started.pdf`, etc.
+The files will be named like: `d1_01_Introduction.pdf`, `d1_02_Getting_Started.pdf`, etc. The `d1` prefix indicates the outline depth used (depth 1 = top-level chapters). Each source gets its own subdirectory under `Chunks/`.
 
 ### Viewing Your Projects
 
@@ -159,7 +159,7 @@ arcane list
 
 ### `arcane show <project>`
 
-Shows detailed information about a project, including source metadata.
+Shows detailed information about a project, including source metadata such as chunking depth, page count, and number of chunks generated.
 
 **Example:**
 ```bash
@@ -174,6 +174,9 @@ Sources :
     needs_chunking = true
     start_page_physical = 12
     chapter_map = 34 entries
+    depth = 2
+    page_count = 1312
+    chunks = 34
 ```
 
 ### `arcane add <project> <pdf-path> [options]`
@@ -184,6 +187,8 @@ Adds a PDF source to a project.
 - `--textbook`: Mark the source as a textbook that needs chunking
 - `--start-page N`: Physical page index where printed Page 1 starts (for textbooks with front matter)
 - `--title T`: Override the display title (defaults to filename)
+- `--tag TAG`: Add a tag to the project (can be repeated, e.g. `--tag math --tag algorithms`)
+- `--type TYPE`: Source type label: textbook, report, paper, cheatsheet, or any custom string
 
 **Examples:**
 
@@ -202,25 +207,31 @@ Add a textbook with front matter:
 arcane add "Algorithms" ~/Books/book.pdf --textbook --start-page 15
 ```
 
-Add with a custom title:
+Add with a custom title and tags:
 ```bash
-arcane add "Algorithms" ~/Books/book.pdf --textbook --title "Algorithms Textbook 2023"
+arcane add "Algorithms" ~/Books/book.pdf --textbook --title "Algorithms Textbook 2023" --tag math
+```
+
+Add with a custom source type:
+```bash
+arcane add "Algorithms" ~/Papers/survey.pdf --type paper
 ```
 
 **Note:** If the project doesn't exist, it will be created automatically.
 
-### `arcane chunk <project> [--force] [--depth N] [--dry-run]`
+### `arcane chunk <project> [--force] [--depth N] [--dry-run] [--source S]`
 
-Splits all textbook sources in a project into individual chapter PDFs.
+Splits textbook sources in a project into individual chapter PDFs.
 
 **Options:**
 - `--force`: Delete existing chunks and regenerate them
 - `--depth N`: How many levels of the outline tree to use (default: 1 = top-level chapters only; 2 = chapters + sections; etc.)
 - `--dry-run`: Preview detected chapter boundaries without writing any files
+- `--source S`: Only chunk a specific source (by title). This allows different textbooks to be chunked at different depths, since each textbook may have a different level of hierarchy in its table of contents
 
 **Examples:**
 
-Basic chunking:
+Basic chunking (all textbook sources):
 ```bash
 arcane chunk "Algorithms"
 ```
@@ -234,6 +245,14 @@ Force re-chunking with sub-chapter granularity:
 ```bash
 arcane chunk "Algorithms" --force --depth 2
 ```
+
+Chunk a specific textbook at its own depth:
+```bash
+arcane chunk "Algorithms" --source "CLRS 4th Edition" --depth 2
+arcane chunk "Algorithms" --source "Sedgewick & Wayne" --depth 1
+```
+
+Chunk files are named with a depth prefix and chapter title, e.g. `d2_01_Introduction.pdf`, `d2_02_Sorting.pdf`. This distinguishes chunks created at different depths.
 
 This command is idempotent—running it multiple times won't re-process chapters that already exist (unless `--force` is used).
 
@@ -417,20 +436,24 @@ Arcane stores everything in `~/Arcane/`:
 ```
 ~/Arcane/
 ├── projects.json                                # All project metadata
+├── arcane.db                                    # SQLite database
+├── CAS/                                         # Content-addressed blob store
 └── Library/
     ├── Algorithms/
     │   ├── Originals/
-    │   │   ├── clrs.pdf                        # Symlink to original
-    │   │   └── quicksort-paper.pdf             # Symlink to original
+    │   │   ├── clrs.pdf                        # Symlink (Unix) or copy (Windows)
+    │   │   └── quicksort-paper.pdf
     │   └── Chunks/
-    │       ├── 01_Introduction.pdf             # Chapter 1
-    │       ├── 02_Getting_Started.pdf          # Chapter 2
-    │       └── ...
+    │       └── Introduction to Algorithms/     # Per-source subdirectory
+    │           ├── d1_01_Front_Matter.pdf       # Depth-prefixed chunk files
+    │           ├── d1_02_The_Role_of_Algorithms.pdf
+    │           └── ...
     └── Machine Learning/
         ├── Originals/
         │   └── ml-textbook.pdf
         └── Chunks/
-            └── ...
+            └── ML Textbook/
+                └── ...
 ```
 
 ### projects.json
@@ -448,7 +471,7 @@ Contains symlinks (or copies on Windows) to the original PDF files. This allows 
 
 ### Chunks Directory
 
-Contains the individual chapter PDFs extracted from textbooks. Files are named with a prefix number for sorting (e.g., `01_`, `02_`, etc.) followed by the chapter title.
+Contains the individual chapter PDFs extracted from textbooks. Each source gets its own subdirectory (e.g., `Chunks/CLRS 4th Edition/`). Files are named with a depth prefix, a sequence number, and the chapter title (e.g., `d1_01_Introduction.pdf`, `d2_03_Sorting > Quicksort.pdf`). The depth prefix (`d1`, `d2`, etc.) indicates the outline depth used during chunking.
 
 ## Removing Sources and Projects
 

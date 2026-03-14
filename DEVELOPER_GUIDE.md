@@ -74,7 +74,8 @@ src/
 │   ├── filesystem.rs       # Directory layout helpers
 │   ├── migrations.rs       # Schema migration runner
 │   └── sql/
-│       └── v1_core.sql     # Core schema (projects, sources, tags, blobs, chunks)
+│       ├── v1_core.sql     # Core schema (projects, sources, tags, blobs, chunks)
+│       └── v2_add_depth_pagecount.sql  # Adds depth and page_count columns to sources
 ├── ui/
 │   ├── mod.rs              # TUI module
 │   ├── app.rs              # Application state machine
@@ -116,7 +117,7 @@ The CLI layer uses `clap` derive macros for declarative command definitions in `
 - `cmd_list()`: Lists all projects and sources
 - `cmd_show()`: Shows detailed project information
 - `cmd_add()`: Adds a PDF source (CAS ingest + dual-store persistence)
-- `cmd_chunk()`: Splits textbooks into chapters (supports `--force`, `--depth`, `--dry-run`)
+- `cmd_chunk()`: Splits textbooks into chapters (supports `--force`, `--depth`, `--dry-run`, `--source` for per-textbook depth)
 - `cmd_search()`: Full-text search with optional project/source filters
 - `cmd_remove()`: Removes a source or entire project (cascading cleanup)
 - `cmd_list_chunks()`: Lists chunk files for a source
@@ -156,7 +157,7 @@ pub struct Project {
 }
 ```
 
-**`SourceMeta`** (src/models.rs:54)
+**`SourceMeta`** (src/models/source.rs)
 ```rust
 pub struct SourceMeta {
     pub title: String,                      // Display name
@@ -164,18 +165,20 @@ pub struct SourceMeta {
     pub needs_chunking: bool,               // Textbook vs Report
     pub chapter_map: HashMap<u32, String>,  // Physical page → chapter name
     pub start_page_physical: Option<u32>,   // Offset for page numbering
+    pub depth: Option<u32>,                 // Outline depth used for last chunk
+    pub page_count: Option<u32>,            // Total pages in the PDF
 }
 ```
 
 **`Source` trait** (src/models/source.rs)
 ```rust
 pub trait Source {
-    fn chunk(&self, chunks_dir: &Path, depth: u32) -> Result<()>;
+    fn chunk(&self, chunks_dir: &Path, depth: u32) -> Result<(u32, usize)>;
     fn youtube(&self, url: &str) -> Result<()>; // Future feature
 }
 ```
 
-The `depth` parameter controls how many levels of the PDF outline tree to walk (1 = top-level chapters, 2+ = sub-sections).
+The `depth` parameter controls how many levels of the PDF outline tree to walk (1 = top-level chapters, 2+ = sub-sections). Returns `(page_count, chunk_count)` on success.
 
 #### Trait Implementations
 

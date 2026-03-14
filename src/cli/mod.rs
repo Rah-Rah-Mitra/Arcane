@@ -77,6 +77,10 @@ pub enum Commands {
         /// Preview detected chapter boundaries without writing files.
         #[arg(long)]
         dry_run: bool,
+
+        /// Only chunk a specific source (by title). Allows per-textbook depth.
+        #[arg(long)]
+        source: Option<String>,
     },
 
     /// Merge multiple PDF files into one.

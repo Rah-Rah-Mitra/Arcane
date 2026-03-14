@@ -42,6 +42,8 @@ arcane chunk "Rust-Programming" --dry-run --depth 2
 
 # 5. Split textbooks into per-chapter PDFs (use --release build for speed)
 arcane chunk "Rust-Programming"
+# Or chunk a specific textbook at its own depth:
+arcane chunk "Rust-Programming" --source "The Rust Book" --depth 2
 
 # 6. Inspect
 arcane list
@@ -89,7 +91,7 @@ Chapter PDFs are written to `~/Arcane/Library/<Project>/Chunks/<Source>/`.
     └── <Project>/
         ├── Originals/         # symlinks (Unix) or copies (Windows) of source PDFs
         └── Chunks/
-            └── <Source>/      # per-chapter PDFs: 01_Introduction.pdf, …
+            └── <Source>/      # per-chapter PDFs: d1_01_Introduction.pdf, …
 ```
 
 ## All Commands
@@ -97,8 +99,8 @@ Chapter PDFs are written to `~/Arcane/Library/<Project>/Chunks/<Source>/`.
 | Command | Description |
 |---------|-------------|
 | `arcane new <project>` | Create a new project |
-| `arcane add <project> <file> [--textbook] [--start-page N] [--title "…"]` | Add a source |
-| `arcane chunk <project> [--force] [--depth N] [--dry-run]` | Split textbooks into chapter PDFs |
+| `arcane add <project> <file> [--textbook] [--start-page N] [--title "…"] [--tag T] [--type T]` | Add a source |
+| `arcane chunk <project> [--force] [--depth N] [--dry-run] [--source S]` | Split textbooks into chapter PDFs |
 | `arcane list` | List all projects and their sources |
 | `arcane list-chunks <project> [source]` | List chunk files for a source |
 | `arcane show <project>` | Show detailed project info |
