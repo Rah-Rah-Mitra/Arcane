@@ -61,14 +61,12 @@ fn ensure_ort_loaded() -> anyhow::Result<()> {
             .map(|builder| {
                 builder.commit();
             })
-            .map_err(|e| {
-                format!(
-                    "Cannot load ONNX Runtime from '{dll}'.\n\
+            .map_err(|e| format!(
+                "Cannot load ONNX Runtime from '{dll}'.\n\
                  {e}\n\
                  Run `arcane init-ocr` to download it,\n\
                  or set {ORT_DYLIB_ENV}=<path/to/library>"
-                )
-            })
+            ))
     });
     match result {
         Ok(()) => Ok(()),
@@ -115,12 +113,12 @@ fn get_ocr_engine() -> anyhow::Result<&'static OAROCR> {
         let det = model_path(DET_MODEL_ENV, DET_FILENAME);
         let rec = model_path(REC_MODEL_ENV, REC_FILENAME);
         let dict = model_path(DICT_ENV, DICT_FILENAME);
-        OAROCRBuilder::new(&det, &rec, &dict).build().map_err(|e| {
-            format!(
+        OAROCRBuilder::new(&det, &rec, &dict)
+            .build()
+            .map_err(|e| format!(
                 "Failed to load OCR models.\n  {det}\n  {rec}\n  {dict}\n\
                  Run `arcane init-ocr` to download them.\nError: {e}"
-            )
-        })
+            ))
     });
     match result {
         Ok(engine) => Ok(engine),
@@ -218,7 +216,9 @@ pub fn extract_headings_ocr(
         let batch_meta = &meta[img_idx..img_idx + batch_size];
         img_idx += batch_size;
 
-        let outputs = ocr.predict(batch).context("OCR batch predict failed")?;
+        let outputs = ocr
+            .predict(batch)
+            .context("OCR batch predict failed")?;
 
         for (i, output) in outputs.iter().enumerate() {
             let (page_idx, page_h_pts, img_h_px) = batch_meta[i];

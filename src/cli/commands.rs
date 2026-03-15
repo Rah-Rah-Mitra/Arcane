@@ -1449,10 +1449,11 @@ pub fn cmd_init_ocr(
     // Build platform-specific manifest.
     let items = build_download_manifest(skip_runtime)?;
 
-    let bar_style =
-        ProgressStyle::with_template("  {prefix:<30} [{bar:25}] {bytes}/{total_bytes}  {msg}")
-            .unwrap()
-            .progress_chars("=> ");
+    let bar_style = ProgressStyle::with_template(
+        "  {prefix:<30} [{bar:25}] {bytes}/{total_bytes}  {msg}",
+    )
+    .unwrap()
+    .progress_chars("=> ");
 
     for item in &items {
         let target = dest_dir.join(item.filename);
@@ -1660,7 +1661,11 @@ fn platform_runtime_items() -> Result<(DownloadItem, DownloadItem)> {
     Ok((ort, pdfium))
 }
 
-fn download_to_file(url: &str, dest: &std::path::Path, pb: &indicatif::ProgressBar) -> Result<()> {
+fn download_to_file(
+    url: &str,
+    dest: &std::path::Path,
+    pb: &indicatif::ProgressBar,
+) -> Result<()> {
     use std::io::{Read as _, Write as _};
 
     let resp = ureq::get(url)
@@ -1692,7 +1697,11 @@ fn download_to_file(url: &str, dest: &std::path::Path, pb: &indicatif::ProgressB
     Ok(())
 }
 
-fn extract_from_zip(archive: &std::path::Path, inner: &str, dest: &std::path::Path) -> Result<()> {
+fn extract_from_zip(
+    archive: &std::path::Path,
+    inner: &str,
+    dest: &std::path::Path,
+) -> Result<()> {
     let file = std::fs::File::open(archive)?;
     let mut zip = zip::ZipArchive::new(file)?;
     let mut entry = zip
@@ -1703,16 +1712,18 @@ fn extract_from_zip(archive: &std::path::Path, inner: &str, dest: &std::path::Pa
     Ok(())
 }
 
-fn extract_from_tgz(archive: &std::path::Path, inner: &str, dest: &std::path::Path) -> Result<()> {
+fn extract_from_tgz(
+    archive: &std::path::Path,
+    inner: &str,
+    dest: &std::path::Path,
+) -> Result<()> {
     let file = std::fs::File::open(archive)?;
     let gz = flate2::read::GzDecoder::new(file);
     let mut tar = tar::Archive::new(gz);
     for entry in tar.entries()? {
         let mut entry = entry?;
         let path = entry.path()?.to_string_lossy().replace('\\', "/");
-        if path == inner
-            || path.ends_with(&format!("/{}", inner.rsplit('/').next().unwrap_or(inner)))
-        {
+        if path == inner || path.ends_with(&format!("/{}", inner.rsplit('/').next().unwrap_or(inner))) {
             let mut out = std::fs::File::create(dest)?;
             std::io::copy(&mut entry, &mut out)?;
             return Ok(());
