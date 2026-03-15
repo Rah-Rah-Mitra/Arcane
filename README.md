@@ -128,6 +128,7 @@ Chapter PDFs are written to `~/Arcane/Library/<Project>/Chunks/<Source>/`.
 | `arcane rotate <input> [--degrees N] [--pages P]` | Rotate PDF pages |
 | `arcane protect <input> --password P` | Password-protect a PDF |
 | `arcane unlock <input> --password P` | Remove password protection |
+| `arcane init-ocr [--models-dir D] [--skip-runtime] [--force]` | Download OCR models and runtime libraries |
 | `arcane watch <project>` | Watch project directory for new PDFs |
 | `arcane tui` | Launch the interactive terminal UI |
 
@@ -140,23 +141,15 @@ optional OCR overlay tier using PaddleOCR v5 via ONNX Runtime:
 # Build with OCR
 cargo build --release --features ocr
 
-# Download models (one-time)
-mkdir models
-# From https://github.com/GreatV/oar-ocr/releases/tag/v0.3.0 :
-#   pp-ocrv5_mobile_det.onnx       (detection)
-#   en_pp-ocrv5_mobile_rec.onnx    (English recognition)
-#   ppocrv5_en_dict.txt            (English dictionary)
-# From https://github.com/microsoft/onnxruntime/releases/tag/v1.24.1 :
-#   onnxruntime.dll                (ONNX Runtime — Windows x64)
-# From https://github.com/bblanchon/pdfium-binaries/releases :
-#   pdfium.dll                     (PDFium — place next to arcane binary)
-
-# Set ORT_DYLIB_PATH if not next to binary
-set ORT_DYLIB_PATH=path/to/onnxruntime.dll
+# Download models + runtime libraries (one-time, all platforms)
+arcane init-ocr
 
 # recover-outline now handles encoding-broken PDFs
 arcane recover-outline "book.pdf" --toc-pages 14-20 --output "book-fixed.pdf"
 ```
+
+`init-ocr` downloads everything to `~/Arcane/models/` and auto-detects at runtime.
+Use `--force` to re-download, `--skip-runtime` to skip ONNX Runtime and PDFium DLLs.
 
 For non-English PDFs, override the recognition model and dictionary via env vars:
 `ARCANE_OCR_REC_MODEL`, `ARCANE_OCR_DICT` (see `src/pdf/ocr.rs` for details).

@@ -135,5 +135,10 @@ fn main() -> anyhow::Result<()> {
             threshold,
             json,
         } => commands::cmd_sync_pages(file, toc_pages, threshold, json),
+        Commands::InitOcr {
+            models_dir,
+            skip_runtime,
+            force,
+        } => commands::cmd_init_ocr(models_dir, skip_runtime, force),
     }
 }

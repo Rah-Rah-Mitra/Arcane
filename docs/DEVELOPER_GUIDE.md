@@ -110,6 +110,11 @@ src/
 - `notify` (7) - File system watching
 - `ratatui` (0.29) - Terminal UI framework
 - `crossterm` (0.28) - Terminal manipulation
+- `ureq` (3) - HTTP downloads (`init-ocr`)
+- `zip` (2) - ZIP archive extraction (`init-ocr`)
+- `tar` (0.4) - tar archive extraction (`init-ocr`)
+- `flate2` (1) - gzip decompression (`init-ocr`)
+- `indicatif` (0.18) - Progress bars (`init-ocr`)
 
 **Optional OCR Dependencies** (enabled with `--features ocr`):
 - `oar-ocr` (0.6) - PaddleOCR v5 via ONNX Runtime for text recognition
@@ -144,6 +149,7 @@ The CLI layer uses `clap` derive macros for declarative command definitions in `
 - `cmd_tag()` / `cmd_untag()`: Tag management
 - `cmd_merge()` / `cmd_split()` / `cmd_rotate()`: Structural PDF operations
 - `cmd_protect()` / `cmd_unlock()`: PDF encryption
+- `cmd_init_ocr()`: Downloads OCR models + runtime DLLs to `~/Arcane/models/`
 - `cmd_watch()`: File system watcher
 - `cmd_tui()`: Interactive terminal UI
 
@@ -373,25 +379,31 @@ Behind the `ocr` feature flag, Arcane includes an OCR overlay tier for PDFs with
 
 - **pdfium-render**: Rasterizes PDF pages at configurable DPI (default 150)
 - **oar-ocr**: PaddleOCR v5 mobile models for text detection + recognition
-- **ort (load-dynamic)**: Loads `onnxruntime.dll` at runtime via `ORT_DYLIB_PATH`
+- **ort (load-dynamic)**: Loads ONNX Runtime at runtime via `ORT_DYLIB_PATH`
 
 ```
 extract_headings_ocr(path, page_indices, dpi)
     │
     ├── ensure_ort_loaded()      — OnceLock-guarded DLL init (once per process)
-    ├── OAROCRBuilder::new()     — Load det/rec/dict models
-    ├── pdfium render @ DPI      — Page → RgbImage
-    ├── ocr.predict()            — Text regions with bounding boxes + confidence
+    ├── get_ocr_engine()         — OnceLock-cached OAROCR (built once, reused)
+    ├── bind_pdfium()            — ~/Arcane/models/ → CWD → system search
+    ├── Phase 1: render pages    — All pages → Vec<RgbImage>
+    ├── Phase 2: batch predict   — Chunks of 16 images → single predict() call
     ├── Filter box_h ≥ 1.5%     — Keep heading-sized regions only
     └── Pixel → PDF coords      — Flip Y, scale by 72/dpi → PositionedText
 ```
 
-Models default to `models/` relative to the binary (English PaddleOCR v5 mobile):
+**Model path resolution** (env var → `~/Arcane/models/` → `models/` CWD-relative):
 - `pp-ocrv5_mobile_det.onnx` — detection (language-agnostic)
 - `en_pp-ocrv5_mobile_rec.onnx` — English recognition
 - `ppocrv5_en_dict.txt` — English dictionary
 
-Override via env vars: `ARCANE_OCR_DET_MODEL`, `ARCANE_OCR_REC_MODEL`, `ARCANE_OCR_DICT`.
+Run `arcane init-ocr` to download everything. Override via env vars: `ARCANE_OCR_DET_MODEL`, `ARCANE_OCR_REC_MODEL`, `ARCANE_OCR_DICT`.
+
+**Performance optimizations:**
+- **Engine caching**: `OAROCR` is stored in a `OnceLock` — model loading happens once per process, not per invocation. `OAROCR` is `Send + Sync` (backed by `Vec<Mutex<Session>>` + `AtomicUsize`).
+- **Batched predict**: Pages are rendered in bulk, then fed to `predict()` in batches of 16 instead of one-at-a-time, reducing ONNX session overhead from N calls to ceil(N/16).
+- **Platform-aware ORT**: `ORT_DYLIB_DEFAULT` resolves to `onnxruntime.dll` / `libonnxruntime.so` / `libonnxruntime.dylib` per platform.
 
 **Pipeline integration** (`pipeline.rs`):
 - `heading_text_quality()` computes `alpha_chars / total_chars` across Tier 1 headings

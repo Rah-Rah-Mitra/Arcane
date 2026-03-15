@@ -10,5 +10,5 @@ pub mod legacy;
 pub mod migrations;
 
 pub use database::Database;
-pub use filesystem::{chunks_dir, originals_dir};
+pub use filesystem::{chunks_dir, models_dir, originals_dir};
 pub use legacy::ProjectStore;
