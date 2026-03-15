@@ -3,7 +3,7 @@
 use anyhow::{Context, Result};
 use tantivy::collector::TopDocs;
 use tantivy::query::{BooleanQuery, Occur, QueryParser, TermQuery};
-use tantivy::schema::{IndexRecordOption, Value};
+use tantivy::schema::IndexRecordOption;
 use tantivy::{TantivyDocument, Term};
 
 use super::indexer::{SearchIndex, FIELD_BODY, FIELD_CHAPTER, FIELD_PAGE, FIELD_PROJECT, FIELD_TITLE};
