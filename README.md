@@ -106,30 +106,31 @@ Chapter PDFs are written to `~/Arcane/Library/<Project>/Chunks/<Source>/`.
 
 | Command | Description |
 |---------|-------------|
-| `arcane new <project>` | Create a new project |
-| `arcane add <project> <file> [--textbook] [--start-page N] [--title "…"] [--tag T] [--type T]` | Add a source |
-| `arcane chunk <project> [--force] [--depth N] [--dry-run] [--source S]` | Split textbooks into chapter PDFs |
+| `arcane new <name>` | Create a new project |
 | `arcane list` | List all projects and their sources |
-| `arcane list-chunks <project> [source]` | List chunk files for a source |
-| `arcane show <project>` | Show detailed project info |
-| `arcane search <query> [--limit N] [--project P] [--source S]` | Full-text search with optional filters |
-| `arcane reindex` | Rebuild the full-text search index |
+| `arcane show <name>` | Show detailed project info |
 | `arcane tag <project> <tag>` | Add a tag to a project |
-| `arcane untag <project> <tag>` | Remove a tag |
-| `arcane outline <file> [--depth N]` | Show PDF outline tree and page labels |
+| `arcane untag <project> <tag>` | Remove a tag from a project |
+| `arcane add <project> <path> [--textbook] [--start-page N] [--title "…"] [--tag TAG]… [--type TYPE]` | Add a source PDF. `--tag` is repeatable. `TYPE`: textbook \| report \| paper \| cheatsheet \| custom string |
+| `arcane chunk <project> [--force] [--depth N] [--dry-run] [--source S]` | Split textbooks into per-chapter PDFs. `--depth` default: 1 (1 = top-level chapters, 2+ = sub-sections) |
+| `arcane list-chunks <project> [source]` | List chunk files for a source (or all sources if omitted) |
+| `arcane search <query> [--limit N] [--project P] [--source S]` | Full-text search across all indexed sources. `--limit` default: 10 |
+| `arcane reindex` | Rebuild the full-text search index from all sources |
+| `arcane outline <file> [--depth N]` | Show PDF outline tree and page labels. `--depth` default: 10 |
 | `arcane probe <file> [--json]` | Classify PDF as text-based, scanned, or mixed |
-| `arcane detect-layout <file> [--json] [--pages R]` | Detect structural anchors with statistical typographic profiling |
-| `arcane find-offset <file> [--toc-pages R] [--json]` | Calculate logical-to-physical page offset |
-| `arcane recover-outline <file> [options]` | Recover and inject outline bookmarks (full pipeline) |
-| `arcane sync-pages <file> [--toc-pages R] [--threshold T] [--json]` | RANSAC consensus offset from heading↔TOC matching |
-| `arcane remove <project> [source]` | Remove a source or entire project |
-| `arcane merge <output> <inputs…>` | Merge multiple PDFs into one |
-| `arcane split <input> <ranges…> [--output-dir D]` | Split a PDF by page ranges |
-| `arcane rotate <input> [--degrees N] [--pages P]` | Rotate PDF pages |
-| `arcane protect <input> --password P` | Password-protect a PDF |
-| `arcane unlock <input> --password P` | Remove password protection |
-| `arcane init-ocr [--models-dir D] [--skip-runtime] [--force]` | Download OCR models and runtime libraries |
-| `arcane watch <project>` | Watch project directory for new PDFs |
+| `arcane detect-layout <file> [--json] [--pages RANGE]` | Detect structural anchors via statistical typographic profiling. `--pages`: 0-based range (e.g. "0-5") |
+| `arcane find-offset <file> [--toc-pages RANGE] [--json]` | Calculate logical-to-physical page offset. `--toc-pages`: 1-based (e.g. "3-5") |
+| `arcane sync-pages <file> [--toc-pages RANGE] [--threshold T] [--json]` | RANSAC consensus offset from heading↔TOC matching. `--threshold` default: 0.6 (range: 0.0–1.0). `--toc-pages`: 1-based |
+| `arcane recover-outline <file> [--output PATH] [--dry-run] [--min-font-ratio R] [--depth N] [--toc-pages RANGE] [--no-inject] [--fuzzy-threshold T] [--json] [--seed-pdf PDF] [--seed-file JSON] [--seed-tolerance N]` | Recover and inject outline bookmarks. `--min-font-ratio` default: 1.2. `--depth` default: 2 (1 = chapters, 2 = +sections). `--fuzzy-threshold` default: 0.6 (0.0–1.0). `--seed-tolerance` default: 5. `--seed-pdf` and `--seed-file` are mutually exclusive |
+| `arcane ocr <file> --pages RANGE [--dpi N] [--json]` | Run OCR on a page range. `--pages` required, 1-based (e.g. "1-5"). `--dpi` default: 150. Requires `--features ocr` build + `arcane init-ocr` |
+| `arcane init-ocr [--models-dir DIR] [--skip-runtime] [--force]` | Download OCR models and runtime libraries to ~/Arcane/models/ |
+| `arcane remove <project> [source]` | Remove a source or entire project (if source omitted) |
+| `arcane merge <output> <inputs…>` | Merge multiple PDF files into one |
+| `arcane split <input> <ranges…> [--output-dir DIR]` | Split a PDF by page ranges. `--output-dir` default: current directory. Ranges: 1-based, inclusive (e.g. "1-5" "6-10") |
+| `arcane rotate <input> [--degrees N] [--output PATH] [--pages P…]` | Rotate PDF pages. `--degrees` default: 90 (must be multiple of 90). `--pages`: 0-based indices; if omitted, all pages rotated |
+| `arcane protect <input> --password P [--output PATH]` | Encrypt a PDF with a password. Overwrites input if `--output` omitted |
+| `arcane unlock <input> --password P [--output PATH]` | Decrypt a password-protected PDF. Overwrites input if `--output` omitted |
+| `arcane watch <project>` | Watch a project directory for new PDFs |
 | `arcane tui` | Launch the interactive terminal UI |
 
 ## OCR Support (Optional)

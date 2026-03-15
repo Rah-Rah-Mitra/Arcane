@@ -332,6 +332,34 @@ Search within one source:
 arcane search "binary heap" --source "CLRS 4th Edition"
 ```
 
+### `arcane tag <project> <tag>`
+
+Adds a tag to a project. Tags help organize and categorize projects.
+
+**Example:**
+```bash
+arcane tag "Algorithms" math
+arcane tag "Algorithms" undergraduate
+```
+
+### `arcane untag <project> <tag>`
+
+Removes a tag from a project.
+
+**Example:**
+```bash
+arcane untag "Algorithms" undergraduate
+```
+
+### `arcane reindex`
+
+Rebuilds the full-text search index from all sources. Useful if the index becomes corrupted or out of sync.
+
+**Example:**
+```bash
+arcane reindex
+```
+
 ### `arcane outline <file> [--depth N]`
 
 Displays the outline (bookmarks) and page labels of any PDF file. Useful for inspecting a PDF before adding it to a project.
@@ -689,6 +717,97 @@ arcane init-ocr --force
 
 # Models only (you already have ONNX Runtime and PDFium)
 arcane init-ocr --skip-runtime
+```
+
+### `arcane merge <output> <inputs…>`
+
+Merges multiple PDF files into a single PDF.
+
+**Example:**
+```bash
+arcane merge combined.pdf chapter1.pdf chapter2.pdf chapter3.pdf
+```
+
+### `arcane split <input> <ranges…> [--output-dir DIR]`
+
+Splits a PDF into multiple files by page ranges.
+
+**Options:**
+- `--output-dir DIR`: Directory for output files (default: current directory)
+
+Page ranges are 1-based and inclusive (e.g. "1-5" means pages 1 through 5).
+
+**Examples:**
+```bash
+arcane split textbook.pdf "1-50" "51-100" "101-150"
+arcane split textbook.pdf "1-10" "11-20" --output-dir ~/Chapters/
+```
+
+### `arcane rotate <input> [--degrees N] [--output PATH] [--pages P…]`
+
+Rotates pages in a PDF.
+
+**Options:**
+- `--degrees N`: Rotation in degrees (default: 90; must be a multiple of 90)
+- `--output PATH`: Output file path (defaults to overwriting the input)
+- `--pages P…`: Specific pages to rotate, 0-based. If omitted, all pages are rotated
+
+**Examples:**
+
+Rotate all pages 90° clockwise:
+```bash
+arcane rotate document.pdf
+```
+
+Rotate specific pages 180°:
+```bash
+arcane rotate document.pdf --degrees 180 --pages 0 3 5 --output rotated.pdf
+```
+
+### `arcane protect <input> --password P [--output PATH]`
+
+Encrypts a PDF with a password.
+
+**Options:**
+- `--password P`: Password for encryption (required)
+- `--output PATH`: Output file path (defaults to overwriting the input)
+
+**Examples:**
+```bash
+arcane protect confidential.pdf --password "s3cret"
+arcane protect report.pdf --password "pass123" --output report-protected.pdf
+```
+
+### `arcane unlock <input> --password P [--output PATH]`
+
+Decrypts a password-protected PDF.
+
+**Options:**
+- `--password P`: Password for decryption (required)
+- `--output PATH`: Output file path (defaults to overwriting the input)
+
+**Examples:**
+```bash
+arcane unlock report-protected.pdf --password "pass123"
+arcane unlock locked.pdf --password "s3cret" --output unlocked.pdf
+```
+
+### `arcane watch <project>`
+
+Watches a project directory for new PDF files. When a new PDF is detected, it is automatically added to the project.
+
+**Example:**
+```bash
+arcane watch "Algorithms"
+```
+
+### `arcane tui`
+
+Launches the interactive terminal UI for browsing projects and sources.
+
+**Example:**
+```bash
+arcane tui
 ```
 
 ### `arcane remove <project> [source]`
