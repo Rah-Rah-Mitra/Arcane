@@ -51,21 +51,22 @@ static ORT_INIT: OnceLock<std::result::Result<(), String>> = OnceLock::new();
 /// Call this before any `oar-ocr` / `ort` API use.
 fn ensure_ort_loaded() -> anyhow::Result<()> {
     let result = ORT_INIT.get_or_init(|| {
-        let dll = std::env::var(ORT_DYLIB_ENV)
-            .unwrap_or_else(|_| ORT_DYLIB_DEFAULT.to_string());
+        let dll = std::env::var(ORT_DYLIB_ENV).unwrap_or_else(|_| ORT_DYLIB_DEFAULT.to_string());
         ort::init_from(&dll)
             .map(|builder| {
                 // commit() returns bool (true = newly set, false = already set).
                 builder.commit();
             })
-            .map_err(|e| format!(
-                "Cannot load ONNX Runtime DLL from '{dll}'.\n\
+            .map_err(|e| {
+                format!(
+                    "Cannot load ONNX Runtime DLL from '{dll}'.\n\
                  {e}\n\
                  Download onnxruntime-win-x64-1.24.1.zip from\n\
                  https://github.com/microsoft/onnxruntime/releases/tag/v1.24.1\n\
                  Place onnxruntime.dll next to the arcane binary,\n\
                  or set {ORT_DYLIB_ENV}=<path/to/onnxruntime.dll>"
-            ))
+                )
+            })
     });
     // OnceLock stores the first result; re-raise the error string if it failed.
     match result {
@@ -123,12 +124,14 @@ pub fn extract_headings_ocr(
 
     let ocr = OAROCRBuilder::new(&det, &rec, &dict)
         .build()
-        .with_context(|| format!(
-            "Failed to load OCR models.\n\
+        .with_context(|| {
+            format!(
+                "Failed to load OCR models.\n\
              Expected:\n  {det}\n  {rec}\n  {dict}\n\
              Download from https://github.com/GreatV/oar-ocr/releases\n\
              Or set env vars: {DET_MODEL_ENV}, {REC_MODEL_ENV}, {DICT_ENV}"
-        ))?;
+            )
+        })?;
 
     // --- Load PDF via pdfium -----------------------------------------------
     let pdfium = Pdfium::new(

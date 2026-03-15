@@ -488,6 +488,7 @@ pub fn cmd_list_chunks(project_name: &str, source_filter: Option<&str>) -> Resul
 // Recover outline command
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 pub fn cmd_recover_outline(
     file: std::path::PathBuf,
     output: Option<std::path::PathBuf>,
@@ -504,7 +505,7 @@ pub fn cmd_recover_outline(
     let mut doc = lopdf::Document::load(&file)
         .with_context(|| format!("failed to open PDF at {}", file.display()))?;
 
-    let toc_range = toc_pages.as_deref().and_then(|s| parse_page_range(s));
+    let toc_range = toc_pages.as_deref().and_then(parse_page_range);
 
     let config = RecoveryConfig {
         min_font_ratio: min_font_ratio as f32,
@@ -522,8 +523,7 @@ pub fn cmd_recover_outline(
     if json {
         println!(
             "{}",
-            serde_json::to_string_pretty(&result)
-                .context("failed to serialise recovery result")?
+            serde_json::to_string_pretty(&result).context("failed to serialise recovery result")?
         );
 
         // Still save if injection happened.
@@ -544,7 +544,9 @@ pub fn cmd_recover_outline(
     if result.chapter_map.is_empty() {
         if result.probe.document_kind == crate::pdf::probe::DocumentKind::Scanned {
             println!("[arcane] Scanned PDF detected — OCR support not yet available.");
-            println!("         Outline recovery for scanned documents is planned for a future release.");
+            println!(
+                "         Outline recovery for scanned documents is planned for a future release."
+            );
         } else {
             println!(
                 "[arcane] No headings detected. Try a lower --min-font-ratio or provide --toc-pages."
@@ -574,12 +576,7 @@ pub fn cmd_recover_outline(
             3 => "    Sub",
             _ => "      ?",
         };
-        println!(
-            "  {:<6} {:<8} {}",
-            h.page_index + 1,
-            depth_label,
-            h.text
-        );
+        println!("  {:<6} {:<8} {}", h.page_index + 1, depth_label, h.text);
     }
 
     // Print verification summary.
@@ -640,8 +637,14 @@ pub fn cmd_probe(file: std::path::PathBuf, json: bool) -> Result<()> {
     println!("Type:         {}", result.document_kind);
     println!("Text pages:   {}", result.text_page_count);
     println!("Image pages:  {}", result.image_page_count);
-    println!("Has outlines: {}", if result.has_outlines { "yes" } else { "no" });
-    println!("Page labels:  {}", if result.has_page_labels { "yes" } else { "no" });
+    println!(
+        "Has outlines: {}",
+        if result.has_outlines { "yes" } else { "no" }
+    );
+    println!(
+        "Page labels:  {}",
+        if result.has_page_labels { "yes" } else { "no" }
+    );
 
     if result.total_pages <= 30 {
         println!("\nPer-page breakdown:");
@@ -668,9 +671,7 @@ pub fn cmd_find_offset(
         .with_context(|| format!("failed to open PDF at {}", file.display()))?;
 
     // Parse optional --toc-pages "start-end" (1-based) → 0-based inclusive range.
-    let toc_range = toc_pages
-        .as_deref()
-        .and_then(|s| parse_page_range(s));
+    let toc_range = toc_pages.as_deref().and_then(parse_page_range);
 
     let result = offset::calculate_offset(&doc, None, toc_range);
 
@@ -678,8 +679,7 @@ pub fn cmd_find_offset(
         Some(ref r) if json => {
             println!(
                 "{}",
-                serde_json::to_string_pretty(r)
-                    .context("failed to serialise offset result")?
+                serde_json::to_string_pretty(r).context("failed to serialise offset result")?
             );
         }
         Some(ref r) => {
@@ -701,7 +701,10 @@ pub fn cmd_find_offset(
             if json {
                 println!("null");
             } else {
-                println!("[arcane] Could not determine page offset for '{}'.", file.display());
+                println!(
+                    "[arcane] Could not determine page offset for '{}'.",
+                    file.display()
+                );
                 println!("         Try providing --toc-pages <start>-<end> (1-based).");
             }
         }
@@ -747,8 +750,7 @@ pub fn cmd_detect_layout(
     if json {
         println!(
             "{}",
-            serde_json::to_string_pretty(&result)
-                .context("failed to serialise layout result")?
+            serde_json::to_string_pretty(&result).context("failed to serialise layout result")?
         );
         return Ok(());
     }
@@ -1358,7 +1360,9 @@ pub fn cmd_sync_pages(
             };
             println!("{}", serde_json::to_string_pretty(&result)?);
         } else {
-            println!("No heading↔TOC matches above threshold {threshold:.2}. Try a lower --threshold.");
+            println!(
+                "No heading↔TOC matches above threshold {threshold:.2}. Try a lower --threshold."
+            );
         }
         return Ok(());
     }
@@ -1401,8 +1405,8 @@ pub fn cmd_sync_pages(
     );
     println!();
     println!(
-        "{:<40}  {:>5}  {:>8}  {:>6}  {}",
-        "TOC Title", "Print", "Physical", "Sim", "Inlier"
+        "{:<40}  {:>5}  {:>8}  {:>6}  Inlier",
+        "TOC Title", "Print", "Physical", "Sim"
     );
     println!("{}", "-".repeat(78));
     for m in &result.matches {

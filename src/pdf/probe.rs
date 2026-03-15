@@ -114,10 +114,7 @@ pub fn probe(doc: &Document, path: &str) -> ProbeResult {
     let pages = doc.get_pages(); // BTreeMap<1-based page_num, ObjectId>
     let total_pages = pages.len() as u32;
 
-    let page_kinds: Vec<PageKind> = pages
-        .values()
-        .map(|&oid| classify_page(doc, oid))
-        .collect();
+    let page_kinds: Vec<PageKind> = pages.values().map(|&oid| classify_page(doc, oid)).collect();
 
     let text_page_count = page_kinds
         .iter()
@@ -187,7 +184,7 @@ fn is_image_xobject(doc: &Document, page_oid: ObjectId, op: &lopdf::content::Ope
     };
 
     // Resolve the page dictionary.
-    let page_dict = match doc.get_object(page_oid).and_then(|o| o.as_dict().map(|d| d.clone())) {
+    let page_dict = match doc.get_object(page_oid).and_then(|o| o.as_dict().cloned()) {
         Ok(d) => d,
         Err(_) => return false,
     };

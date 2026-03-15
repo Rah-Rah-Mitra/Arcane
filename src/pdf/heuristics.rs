@@ -61,7 +61,7 @@ pub fn build_font_histogram(doc: &Document) -> Option<BTreeMap<u16, u64>> {
         };
 
         let mut current_nominal: f32 = 12.0; // raw Tf size
-        let mut tm_scale: f32 = 1.0;        // √(a²+b²) from Tm operator
+        let mut tm_scale: f32 = 1.0; // √(a²+b²) from Tm operator
         let mut current_key: u16 = float_to_key(current_nominal * tm_scale);
 
         for op in &content.operations {
@@ -209,8 +209,8 @@ pub fn extract_headings(doc: &Document, min_ratio: f32, max_depth: u32) -> Vec<H
         };
 
         let mut current_nominal: f32 = 12.0; // raw Tf size
-        let mut tm_scale: f32 = 1.0;        // √(a²+b²) from Tm operator
-        // Effective size (recomputed whenever Tf or Tm changes).
+        let mut tm_scale: f32 = 1.0; // √(a²+b²) from Tm operator
+                                     // Effective size (recomputed whenever Tf or Tm changes).
         let mut current_size: f32 = current_nominal * tm_scale;
 
         for op in &content.operations {
@@ -324,6 +324,7 @@ pub fn extract_headings(doc: &Document, min_ratio: f32, max_depth: u32) -> Vec<H
 ///
 /// When multiple candidates land on the same page, the largest-font one wins
 /// (main chapter heading beats a section heading on the same page).
+#[allow(dead_code)]
 pub fn headings_to_chapter_map(headings: &[HeadingCandidate]) -> BTreeMap<u32, String> {
     let mut map: BTreeMap<u32, HeadingCandidate> = BTreeMap::new();
     for h in headings {
@@ -509,8 +510,7 @@ pub fn inject_hierarchical_outlines(
     //   - Sibling linking: Prev/Next among entries sharing the same parent.
     let mut parent_stack: Vec<(ObjectId, Vec<ObjectId>)> = vec![(root_id, vec![])];
 
-    for i in 0..n {
-        let (item_id, depth) = ids[i];
+    for &(item_id, depth) in ids.iter().take(n) {
         let depth = depth as usize;
 
         // Pop the stack until we're at the right parent level.
@@ -681,6 +681,7 @@ fn float_to_key(size: f32) -> u16 {
 }
 
 /// Clean up a heading title for use as a chapter name.
+#[allow(dead_code)]
 fn sanitise_heading_title(text: &str) -> String {
     // Collapse whitespace, trim, then apply filename-safe cleanup.
     let clean: String = text.split_whitespace().collect::<Vec<_>>().join(" ");

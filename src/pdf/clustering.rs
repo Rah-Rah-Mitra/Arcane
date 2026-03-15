@@ -56,7 +56,7 @@ pub enum FontRole {
 /// Perform 1D natural-breaks (Jenks) clustering on a font-size histogram.
 ///
 /// * `histogram` — from `build_font_histogram`: key = `font_size × 10` rounded,
-///    value = total character count at that size.
+///   value = total character count at that size.
 /// * `max_k` — maximum number of clusters to produce.
 ///
 /// Returns clusters sorted by centroid **descending** (largest font first).
@@ -101,7 +101,11 @@ pub fn cluster_font_sizes(histogram: &BTreeMap<u16, u64>, max_k: usize) -> Vec<C
     }
 
     // Sort descending by centroid (largest font first).
-    clusters.sort_by(|a, b| b.centroid.partial_cmp(&a.centroid).unwrap_or(std::cmp::Ordering::Equal));
+    clusters.sort_by(|a, b| {
+        b.centroid
+            .partial_cmp(&a.centroid)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     clusters
 }
@@ -160,7 +164,10 @@ pub fn assign_roles(clusters: &[Cluster]) -> Vec<FontCluster> {
     // Assign heading levels to above-body clusters (largest → Heading1, etc.).
     let heading_roles = [FontRole::Heading1, FontRole::Heading2, FontRole::Heading3];
     for (rank, &(idx, _)) in above.iter().enumerate() {
-        result[idx].role = heading_roles.get(rank).copied().unwrap_or(FontRole::Unknown);
+        result[idx].role = heading_roles
+            .get(rank)
+            .copied()
+            .unwrap_or(FontRole::Unknown);
     }
 
     // Assign below-body roles.
@@ -231,8 +238,8 @@ fn jenks_breaks(values: &[(f32, u64)], k: usize) -> Vec<usize> {
     let mut split = vec![vec![0usize; n]; k + 1];
 
     // Base case: 1 cluster.
-    for j in 0..n {
-        cost[1][j] = ssd_range(&weighted, 0, j + 1);
+    for (j, cost_entry) in cost[1].iter_mut().take(n).enumerate() {
+        *cost_entry = ssd_range(&weighted, 0, j + 1);
     }
 
     // Fill DP for 2..=k clusters.
@@ -268,10 +275,7 @@ fn sum_of_squared_deviations_from_mean(values: &[(f32, u64)]) -> f64 {
 }
 
 /// Sum of squared deviations from class means, given break indices.
-fn sum_of_squared_deviations_from_class_means(
-    values: &[(f32, u64)],
-    breaks: &[usize],
-) -> f64 {
+fn sum_of_squared_deviations_from_class_means(values: &[(f32, u64)], breaks: &[usize]) -> f64 {
     let vals: Vec<f64> = values.iter().map(|(s, _)| *s as f64).collect();
     let n = vals.len();
     let mut total = 0.0;
@@ -301,10 +305,7 @@ fn ssd_range(values: &[f64], start: usize, end: usize) -> f64 {
 /// Build a `Cluster` from a slice of `(font_size, char_count)`.
 fn make_cluster(members: &[(f32, u64)]) -> Cluster {
     let total_chars: u64 = members.iter().map(|(_, c)| c).sum();
-    let weighted_sum: f64 = members
-        .iter()
-        .map(|(s, c)| *s as f64 * *c as f64)
-        .sum();
+    let weighted_sum: f64 = members.iter().map(|(s, c)| *s as f64 * *c as f64).sum();
     let centroid = if total_chars > 0 {
         (weighted_sum / total_chars as f64) as f32
     } else {
@@ -343,7 +344,7 @@ mod tests {
         // Headings: 18pt (few chars)
         h.insert(180, 500);
         let clusters = cluster_font_sizes(&h, 5);
-        assert!(clusters.len() >= 1);
+        assert!(!clusters.is_empty());
         // With only 2 distinct sizes, we should get 2 clusters.
         assert_eq!(clusters.len(), 2);
     }
@@ -351,10 +352,10 @@ mod tests {
     #[test]
     fn cluster_three_distinct_sizes() {
         let mut h = BTreeMap::new();
-        h.insert(100, 5_000);   // 10pt — footnote
-        h.insert(120, 50_000);  // 12pt — body
-        h.insert(180, 200);     // 18pt — heading
-        h.insert(200, 150);     // 20pt — heading (close to 18pt)
+        h.insert(100, 5_000); // 10pt — footnote
+        h.insert(120, 50_000); // 12pt — body
+        h.insert(180, 200); // 18pt — heading
+        h.insert(200, 150); // 20pt — heading (close to 18pt)
 
         let clusters = cluster_font_sizes(&h, 5);
         assert!(clusters.len() >= 2);

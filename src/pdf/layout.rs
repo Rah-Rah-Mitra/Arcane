@@ -19,8 +19,7 @@ use serde::{Deserialize, Serialize};
 
 use super::clustering::{assign_roles, cluster_font_sizes, FontCluster, FontRole};
 use super::heuristics::{
-    build_font_histogram, get_page_content_bytes, obj_as_f32,
-    pdf_obj_to_string,
+    build_font_histogram, get_page_content_bytes, obj_as_f32, pdf_obj_to_string,
 };
 
 // ---------------------------------------------------------------------------
@@ -288,7 +287,7 @@ pub fn extract_positioned_text(
             }
             // Set leading: TL
             "TL" => {
-                if let Some(l) = op.operands.first().and_then(|o| obj_as_f32(o)) {
+                if let Some(l) = op.operands.first().and_then(obj_as_f32) {
                     leading = l;
                 }
             }
@@ -401,7 +400,10 @@ pub fn extract_all_positioned(doc: &Document) -> Vec<PositionedText> {
 ///
 /// Uses integer-scaled arithmetic (`size × 10` as `u16`) in the hot path to
 /// minimise floating-point overhead on large documents.
-pub fn build_typographic_profile(positioned: &[PositionedText], max_pages: u32) -> TypographicProfile {
+pub fn build_typographic_profile(
+    positioned: &[PositionedText],
+    max_pages: u32,
+) -> TypographicProfile {
     // Determine the page-index cutoff.
     let cutoff_page: u32 = {
         let mut pages: Vec<u32> = positioned.iter().map(|p| p.page_index).collect();
@@ -465,10 +467,14 @@ pub fn build_typographic_profile(positioned: &[PositionedText], max_pages: u32) 
         (14.0_f32, 8.0_f32, 28.0_f32)
     } else {
         let gm = gaps.iter().copied().map(|v| v as f64).sum::<f64>() / gaps.len() as f64;
-        let gvar = gaps.iter().map(|&v| {
-            let d = v as f64 - gm;
-            d * d
-        }).sum::<f64>() / gaps.len() as f64;
+        let gvar = gaps
+            .iter()
+            .map(|&v| {
+                let d = v as f64 - gm;
+                d * d
+            })
+            .sum::<f64>()
+            / gaps.len() as f64;
         let gsd = gvar.sqrt() as f32;
         gaps.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         let p90_idx = ((gaps.len() as f32 * 0.90) as usize).min(gaps.len().saturating_sub(1));
@@ -476,7 +482,14 @@ pub fn build_typographic_profile(positioned: &[PositionedText], max_pages: u32) 
         (gm as f32, gsd, p90)
     };
 
-    TypographicProfile { size_mean, size_stddev, body_centroid, gap_mean, gap_stddev, gap_p90 }
+    TypographicProfile {
+        size_mean,
+        size_stddev,
+        body_centroid,
+        gap_mean,
+        gap_stddev,
+        gap_p90,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -555,17 +568,23 @@ fn get_page_font_descriptors(doc: &Document, page_oid: ObjectId) -> HashMap<Stri
         if let Some(Object::Dictionary(fd)) = fd_obj {
             match fd.get(b"FontWeight") {
                 Ok(Object::Integer(w)) => weight = weight.max(*w as u16),
-                Ok(Object::Real(w))    => weight = weight.max(*w as u16),
+                Ok(Object::Real(w)) => weight = weight.max(*w as u16),
                 _ => {}
             }
             match fd.get(b"ItalicAngle") {
-                Ok(Object::Real(a))    => italic_angle = *a,
+                Ok(Object::Real(a)) => italic_angle = *a,
                 Ok(Object::Integer(a)) => italic_angle = *a as f32,
                 _ => {}
             }
         }
 
-        map.insert(key, FontDescInfo { weight, italic_angle });
+        map.insert(
+            key,
+            FontDescInfo {
+                weight,
+                italic_angle,
+            },
+        );
     }
 
     map
@@ -584,15 +603,18 @@ fn detect_case_pattern(text: &str) -> CasePattern {
 
     // All-caps: every alpha char in every word is uppercase.
     if alpha_words.iter().all(|w| {
-        w.chars().filter(|c| c.is_alphabetic()).all(|c| c.is_uppercase())
+        w.chars()
+            .filter(|c| c.is_alphabetic())
+            .all(|c| c.is_uppercase())
     }) {
         return CasePattern::AllCaps;
     }
 
     // Title case: first char of each word is uppercase.
-    if alpha_words.iter().all(|w| {
-        w.chars().next().map(|c| c.is_uppercase()).unwrap_or(false)
-    }) {
+    if alpha_words
+        .iter()
+        .all(|w| w.chars().next().map(|c| c.is_uppercase()).unwrap_or(false))
+    {
         return CasePattern::TitleCase;
     }
 
@@ -602,9 +624,9 @@ fn detect_case_pattern(text: &str) -> CasePattern {
         .and_then(|w| w.chars().next())
         .map(|c| c.is_uppercase())
         .unwrap_or(false);
-    let rest_lower = alpha_words[1..].iter().all(|w| {
-        w.chars().next().map(|c| c.is_lowercase()).unwrap_or(true)
-    });
+    let rest_lower = alpha_words[1..]
+        .iter()
+        .all(|w| w.chars().next().map(|c| c.is_lowercase()).unwrap_or(true));
     if first_upper && rest_lower {
         return CasePattern::SentenceCase;
     }
@@ -703,7 +725,7 @@ pub fn build_text_features(
 
         let case_pattern = detect_case_pattern(&pt.text);
         match case_pattern {
-            CasePattern::AllCaps   => flags |= FLAG_ALL_CAPS,
+            CasePattern::AllCaps => flags |= FLAG_ALL_CAPS,
             CasePattern::TitleCase => flags |= FLAG_TITLE_CASE,
             _ => {}
         }
@@ -754,42 +776,43 @@ pub fn classify_features(
             continue;
         }
 
-        let bold     = ft.is(FLAG_BOLD);
+        let bold = ft.is(FLAG_BOLD);
         let isolated = ft.is(FLAG_ISOLATED);
-        let large    = ft.is(FLAG_LARGE_FONT);
-        let medium   = ft.is(FLAG_MED_FONT);
-        let small    = ft.is(FLAG_SMALL_FONT);
+        let large = ft.is(FLAG_LARGE_FONT);
+        let medium = ft.is(FLAG_MED_FONT);
+        let small = ft.is(FLAG_SMALL_FONT);
         let all_caps = ft.is(FLAG_ALL_CAPS);
 
         // --- Classification rules (first match wins) ---
-        let classification: Option<(AnchorKind, f32)> =
-            if large && bold && isolated {
-                // Largest confidence: distinctly large + bold + isolated.
-                let base = (0.50 + ft.size_z * 0.05).clamp(0.70, 0.95);
-                Some((AnchorKind::ChapterHeading, base))
-            } else if large && isolated {
-                // Large + isolated, no bold evidence.
-                let base = (0.40 + ft.size_z * 0.04).clamp(0.60, 0.90);
-                Some((AnchorKind::ChapterHeading, base))
-            } else if (bold || all_caps) && isolated && !large && !small {
-                // Bold/all-caps + isolated at body or medium size → section or numbered.
-                if is_numbered_heading(trimmed) {
-                    Some((AnchorKind::NumberedHeading, 0.85))
-                } else {
-                    Some((AnchorKind::SectionHeading, 0.75))
-                }
-            } else if bold && !isolated {
-                // Bold but not isolated — inline emphasis; skip.
-                None
-            } else if is_toc_entry(trimmed) {
-                Some((AnchorKind::TocEntry, 0.70))
-            } else if medium && is_numbered_heading(trimmed) {
-                Some((AnchorKind::NumberedHeading, 0.80))
+        let classification: Option<(AnchorKind, f32)> = if large && bold && isolated {
+            // Largest confidence: distinctly large + bold + isolated.
+            let base = (0.50 + ft.size_z * 0.05).clamp(0.70, 0.95);
+            Some((AnchorKind::ChapterHeading, base))
+        } else if large && isolated {
+            // Large + isolated, no bold evidence.
+            let base = (0.40 + ft.size_z * 0.04).clamp(0.60, 0.90);
+            Some((AnchorKind::ChapterHeading, base))
+        } else if (bold || all_caps) && isolated && !large && !small {
+            // Bold/all-caps + isolated at body or medium size → section or numbered.
+            if is_numbered_heading(trimmed) {
+                Some((AnchorKind::NumberedHeading, 0.85))
             } else {
-                None
-            };
+                Some((AnchorKind::SectionHeading, 0.75))
+            }
+        } else if bold && !isolated {
+            // Bold but not isolated — inline emphasis; skip.
+            None
+        } else if is_toc_entry(trimmed) {
+            Some((AnchorKind::TocEntry, 0.70))
+        } else if medium && is_numbered_heading(trimmed) {
+            Some((AnchorKind::NumberedHeading, 0.80))
+        } else {
+            None
+        };
 
-        let Some((kind, mut confidence)) = classification else { continue };
+        let Some((kind, mut confidence)) = classification else {
+            continue;
+        };
 
         // --- Bayesian confidence boosts ---
         'toc: for (toc_title, printed_page) in toc_entries {
@@ -943,9 +966,7 @@ pub fn detect_page_numbers(positioned: &[PositionedText], page_height: f32) -> V
             continue;
         }
         let trimmed = pt.text.trim();
-        if !trimmed.is_empty()
-            && trimmed.len() <= 4
-            && trimmed.chars().all(|c| c.is_ascii_digit())
+        if !trimmed.is_empty() && trimmed.len() <= 4 && trimmed.chars().all(|c| c.is_ascii_digit())
         {
             if let Ok(num) = trimmed.parse::<u32>() {
                 if num > 0 {
@@ -1123,9 +1144,30 @@ mod tests {
     #[test]
     fn detect_page_numbers_footer() {
         let positioned = vec![
-            PositionedText { page_index: 0, x: 300.0, y: 30.0,  font_size: 10.0, font_key: "F1".into(), text: "42".into() },
-            PositionedText { page_index: 0, x: 100.0, y: 400.0, font_size: 12.0, font_key: "F1".into(), text: "Some body text".into() },
-            PositionedText { page_index: 1, x: 300.0, y: 760.0, font_size: 10.0, font_key: "F1".into(), text: "43".into() },
+            PositionedText {
+                page_index: 0,
+                x: 300.0,
+                y: 30.0,
+                font_size: 10.0,
+                font_key: "F1".into(),
+                text: "42".into(),
+            },
+            PositionedText {
+                page_index: 0,
+                x: 100.0,
+                y: 400.0,
+                font_size: 12.0,
+                font_key: "F1".into(),
+                text: "Some body text".into(),
+            },
+            PositionedText {
+                page_index: 1,
+                x: 300.0,
+                y: 760.0,
+                font_size: 10.0,
+                font_key: "F1".into(),
+                text: "43".into(),
+            },
         ];
         let nums = detect_page_numbers(&positioned, 792.0);
         assert_eq!(nums.len(), 2);
@@ -1141,10 +1183,15 @@ mod tests {
         let mut page_dict = Dictionary::new();
         page_dict.set("Type", Object::Name(b"Page".to_vec()));
         page_dict.set("Contents", Object::Reference(stream_id));
-        page_dict.set("MediaBox", Object::Array(vec![
-            Object::Integer(0), Object::Integer(0),
-            Object::Integer(612), Object::Integer(792),
-        ]));
+        page_dict.set(
+            "MediaBox",
+            Object::Array(vec![
+                Object::Integer(0),
+                Object::Integer(0),
+                Object::Integer(612),
+                Object::Integer(792),
+            ]),
+        );
         let page_id = doc.add_object(Object::Dictionary(page_dict));
         let mut pages_dict = Dictionary::new();
         pages_dict.set("Type", Object::Name(b"Pages".to_vec()));
@@ -1164,7 +1211,8 @@ mod tests {
 
     #[test]
     fn text_matrix_tracking() {
-        let (doc, page_id) = make_test_doc_with_content(b"BT /F1 14 Tf 72 700 Td (Chapter 1) Tj ET");
+        let (doc, page_id) =
+            make_test_doc_with_content(b"BT /F1 14 Tf 72 700 Td (Chapter 1) Tj ET");
         let positioned = extract_positioned_text(&doc, page_id, 0);
         assert_eq!(positioned.len(), 1);
         assert_eq!(positioned[0].text, "Chapter 1");
@@ -1176,9 +1224,8 @@ mod tests {
     #[test]
     fn text_matrix_scale_tracking() {
         // Nominal Tf=1pt, Tm matrix scales by 14 → effective size = 14pt.
-        let (doc, page_id) = make_test_doc_with_content(
-            b"BT /F1 1 Tf 14 0 0 14 72 700 Tm (Heading) Tj ET",
-        );
+        let (doc, page_id) =
+            make_test_doc_with_content(b"BT /F1 1 Tf 14 0 0 14 72 700 Tm (Heading) Tj ET");
         let positioned = extract_positioned_text(&doc, page_id, 0);
         assert_eq!(positioned.len(), 1, "expected one text run");
         assert!(
@@ -1234,7 +1281,11 @@ mod tests {
         // z = 1.5 → FLAG_MED_FONT
         let z_med = (11.5 - profile.size_mean) / profile.size_stddev;
         assert!((z_med - 1.5).abs() < 0.01);
-        assert!(z_med >= 1.5 && z_med < 3.0, "z={} should be in [1.5, 3.0)", z_med);
+        assert!(
+            (1.5..3.0).contains(&z_med),
+            "z={} should be in [1.5, 3.0)",
+            z_med
+        );
         // z = 4.0 → FLAG_LARGE_FONT
         let z_large = (14.0 - profile.size_mean) / profile.size_stddev;
         assert!(z_large > 3.0, "z={} should be > 3.0", z_large);
@@ -1244,7 +1295,10 @@ mod tests {
     fn detect_case_pattern_variants() {
         assert_eq!(detect_case_pattern("INTRODUCTION"), CasePattern::AllCaps);
         assert_eq!(detect_case_pattern("Chapter One"), CasePattern::TitleCase);
-        assert_eq!(detect_case_pattern("This is body text"), CasePattern::SentenceCase);
+        assert_eq!(
+            detect_case_pattern("This is body text"),
+            CasePattern::SentenceCase
+        );
         assert_eq!(detect_case_pattern("123 456"), CasePattern::Numeric);
     }
 

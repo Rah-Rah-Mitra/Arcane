@@ -2,4 +2,6 @@
 # being picked up, which lacks the __std_find_last_of_trivial_pos_1 symbol required
 # by the prebuilt ONNX Runtime static lib in ort-sys).
 [target.x86_64-pc-windows-msvc]
-linker = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\HostX64\x64\link.exe'
+# Allow rustc to pick the available MSVC linker on the runner instead of
+# pinning a specific toolchain path that may not exist (e.g., 14.44.x).
+linker = "link.exe"
