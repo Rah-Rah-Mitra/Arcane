@@ -119,19 +119,12 @@ pub fn recover_outline(
             {
                 tracing::info!("Scanned PDF — running Tier 2 OCR on all pages");
                 let all_pages: Vec<u32> = (0..probe_result.total_pages).collect();
-                match tier2_ocr(path, &all_pages, &config, None) {
+                match tier2_ocr(path, &all_pages, config, None) {
                     Ok(h) if !h.is_empty() => {
                         // Continue the pipeline with OCR-extracted headings below.
                         // We break out of the match by falling through to Phase 3
                         // via a separate code path.
-                        return finish_pipeline(
-                            doc,
-                            path,
-                            config,
-                            probe_result,
-                            None,
-                            h,
-                        );
+                        return finish_pipeline(doc, path, config, probe_result, None, h);
                     }
                     Ok(_) => {
                         tracing::warn!("Tier 2 OCR produced no headings for scanned PDF");
@@ -219,7 +212,14 @@ pub fn recover_outline(
         }
     };
 
-    finish_pipeline(doc, path, config, probe_result, Some(layout_result), headings)
+    finish_pipeline(
+        doc,
+        path,
+        config,
+        probe_result,
+        Some(layout_result),
+        headings,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -252,8 +252,7 @@ fn finish_pipeline(
     }
 
     // Phase 4: Offset calculation.
-    let offset_result =
-        offset::calculate_offset(doc, layout_result.as_ref(), config.toc_pages);
+    let offset_result = offset::calculate_offset(doc, layout_result.as_ref(), config.toc_pages);
 
     // Phase 5: Verify headings against page text.
     let verification = verify_headings(doc, &headings, config.fuzzy_threshold);
@@ -277,8 +276,7 @@ fn finish_pipeline(
                 .context("failed to inject hierarchical outlines")?
         } else {
             let flat_map: BTreeMap<u32, String> = chapter_map.clone();
-            heuristics::inject_outlines(doc, &flat_map)
-                .context("failed to inject outlines")?
+            heuristics::inject_outlines(doc, &flat_map).context("failed to inject outlines")?
         };
         Some(count)
     } else {
@@ -429,7 +427,9 @@ fn tier1_heuristic(
         let trimmed = pt.text.trim();
         // Filter out trivial text.
         if trimmed.len() <= 1
-            || trimmed.chars().all(|c| c.is_numeric() || c == '.' || c == ' ')
+            || trimmed
+                .chars()
+                .all(|c| c.is_numeric() || c == '.' || c == ' ')
         {
             continue;
         }
@@ -488,7 +488,11 @@ fn merge_adjacent_headings(headings: Vec<HeadingCandidate>) -> Vec<HeadingCandid
         }
 
         // Clean up whitespace.
-        current.text = current.text.split_whitespace().collect::<Vec<_>>().join(" ");
+        current.text = current
+            .text
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
         if !current.text.is_empty() {
             merged.push(current);
         }

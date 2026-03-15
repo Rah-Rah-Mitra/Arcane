@@ -133,7 +133,10 @@ fn offset_from_page_labels(doc: &Document) -> Option<OffsetResult> {
     let evidence = vec![OffsetEvidence {
         physical_page: content_start,
         logical_number: 1,
-        matched_text: format!("PageLabels: Arabic numbering starts at physical page {}", content_start),
+        matched_text: format!(
+            "PageLabels: Arabic numbering starts at physical page {}",
+            content_start
+        ),
     }];
 
     Some(OffsetResult {
@@ -193,7 +196,7 @@ fn parse_toc_line(text: &str) -> Option<(String, u32)> {
     // Extract the title: everything before the page number.
     let title_end = trimmed.len() - last_word.len();
     let title = trimmed[..title_end]
-        .trim_end_matches(|c: char| c == '.' || c == ' ' || c == '\t' || c == '\u{a0}')
+        .trim_end_matches(['.', ' ', '\t', '\u{a0}'])
         .trim()
         .to_string();
 
@@ -304,9 +307,7 @@ fn offset_from_page_numbers(detected: &[(u32, u32)]) -> Option<OffsetResult> {
     }
 
     // Find the offset with the most votes.
-    let (best_offset, evidence) = offset_counts
-        .into_iter()
-        .max_by_key(|(_, v)| v.len())?;
+    let (best_offset, evidence) = offset_counts.into_iter().max_by_key(|(_, v)| v.len())?;
 
     let vote_count = evidence.len();
     if vote_count < 3 {
@@ -384,10 +385,7 @@ mod tests {
             parse_toc_line("Chapter 1  42"),
             Some(("Chapter 1".into(), 42))
         );
-        assert_eq!(
-            parse_toc_line("Methods 100"),
-            Some(("Methods".into(), 100))
-        );
+        assert_eq!(parse_toc_line("Methods 100"), Some(("Methods".into(), 100)));
     }
 
     #[test]
@@ -399,7 +397,8 @@ mod tests {
 
     #[test]
     fn best_substring_similarity_exact() {
-        let sim = best_substring_similarity("Introduction", "Chapter 1: Introduction to Algorithms");
+        let sim =
+            best_substring_similarity("Introduction", "Chapter 1: Introduction to Algorithms");
         assert!(sim >= 0.9, "expected high similarity, got {sim}");
     }
 
