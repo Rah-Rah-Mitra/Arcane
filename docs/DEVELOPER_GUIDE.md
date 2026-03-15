@@ -66,6 +66,7 @@ src/
 │   ├── outlines.rs         # /Outlines (bookmarks) extraction with depth support
 │   ├── page_labels.rs      # /PageLabels parsing and resolution
 │   ├── text.rs             # Text extraction from PDF pages
+│   ├── ocr.rs              # OCR overlay tier (optional, behind `ocr` feature flag)
 │   ├── ops.rs              # Structural PDF operations (merge, split, rotate, encrypt)
 │   └── writer.rs           # Low-level PDF writing helpers
 ├── search/
@@ -109,6 +110,11 @@ src/
 - `notify` (7) - File system watching
 - `ratatui` (0.29) - Terminal UI framework
 - `crossterm` (0.28) - Terminal manipulation
+
+**Optional OCR Dependencies** (enabled with `--features ocr`):
+- `oar-ocr` (0.6) - PaddleOCR v5 via ONNX Runtime for text recognition
+- `pdfium-render` (0.8) - PDF page rasterization via Google PDFium
+- `ort` (2.0.0-rc.12) - ONNX Runtime bindings with `load-dynamic` (DLL loaded at runtime)
 
 **Development Dependencies:**
 - `tempfile` (3) - Temporary directories for testing
@@ -361,20 +367,39 @@ pipeline.rs (orchestrator)
 
 The pipeline is designed so each module can be used independently via CLI sub-commands (`probe`, `detect-layout`, `find-offset`, `sync-pages`) or composed together for the full `recover-outline` flow.
 
-#### Pixel-Density Stubs (OCR Milestone)
+#### OCR Overlay Tier (`src/pdf/ocr.rs`)
 
-`layout.rs` contains two `#[allow(dead_code)]` stub functions reserved for the future OCR milestone:
+Behind the `ocr` feature flag, Arcane includes an OCR overlay tier for PDFs with broken font encoding or scanned pages. The module uses:
 
-```rust
-/// (Stub) Estimate font weight from black-pixel ratio in bounding box.
-/// Bold: ratio ~0.15–0.25; Regular: ~0.08–0.12.
-pub fn estimate_weight_from_pixel_density(_image: &[u8], _bbox: (f32, f32, f32, f32)) -> u16 { 400 }
+- **pdfium-render**: Rasterizes PDF pages at configurable DPI (default 150)
+- **oar-ocr**: PaddleOCR v5 mobile models for text detection + recognition
+- **ort (load-dynamic)**: Loads `onnxruntime.dll` at runtime via `ORT_DYLIB_PATH`
 
-/// (Stub) Detect italic via Horizontal Projection Profile.
-pub fn detect_italic_hpp(_image: &[u8], _bbox: (f32, f32, f32, f32)) -> bool { false }
+```
+extract_headings_ocr(path, page_indices, dpi)
+    │
+    ├── ensure_ort_loaded()      — OnceLock-guarded DLL init (once per process)
+    ├── OAROCRBuilder::new()     — Load det/rec/dict models
+    ├── pdfium render @ DPI      — Page → RgbImage
+    ├── ocr.predict()            — Text regions with bounding boxes + confidence
+    ├── Filter box_h ≥ 1.5%     — Keep heading-sized regions only
+    └── Pixel → PDF coords      — Flip Y, scale by 72/dpi → PositionedText
 ```
 
-These will be implemented under the `ocr` feature flag (see [OCR Integration Plan](#ocr-integration-plan)) to provide bold/italic detection for scanned PDFs where no `/FontDescriptor` is available.
+Models default to `models/` relative to the binary (English PaddleOCR v5 mobile):
+- `pp-ocrv5_mobile_det.onnx` — detection (language-agnostic)
+- `en_pp-ocrv5_mobile_rec.onnx` — English recognition
+- `ppocrv5_en_dict.txt` — English dictionary
+
+Override via env vars: `ARCANE_OCR_DET_MODEL`, `ARCANE_OCR_REC_MODEL`, `ARCANE_OCR_DICT`.
+
+**Pipeline integration** (`pipeline.rs`):
+- `heading_text_quality()` computes `alpha_chars / total_chars` across Tier 1 headings
+- If quality < 0.5 (garbled font encoding), `tier2_ocr()` re-runs on the same candidate pages
+- For `DocumentKind::Scanned`, OCR runs on all pages directly
+- Results feed back as `HeadingCandidate` into the standard offset → verify → inject flow
+
+`layout.rs` also contains two `#[allow(dead_code)]` pixel-density stub functions (`estimate_weight_from_pixel_density`, `detect_italic_hpp`) reserved for future bold/italic detection on scanned PDFs where no `/FontDescriptor` is available.
 
 #### Performance
 
@@ -601,10 +626,9 @@ Bad:
 
 ### Planned Features
 
-1. **OCR Support for Scanned PDFs** (Tier 2 Outline Recovery)
-   - See [OCR Integration Plan](#ocr-integration-plan) below for full details
-   - Extract text from scanned/image-only PDFs
-   - Make scanned textbooks searchable and chunkable
+1. ~~**OCR Support for Scanned PDFs**~~ — **Implemented** (see `src/pdf/ocr.rs`)
+   - Build with `cargo build --release --features ocr`
+   - Handles encoding-broken and scanned PDFs via PaddleOCR v5 + pdfium-render
 
 2. **YouTube Integration** (src/models/source.rs — `youtube()` trait method)
    - Extract transcripts from lecture videos
@@ -627,135 +651,21 @@ Bad:
    - Tauri-based GUI with visual project organization
    - PDF preview in app
 
-### OCR Integration Plan
+### OCR Implementation Details
 
-The outline recovery pipeline currently handles text-based PDFs (Tier 1). For scanned PDFs, `arcane probe` reports `Scanned (Image-Only)` and the pipeline gracefully reports that OCR is required. This section describes the planned Tier 2 implementation.
+The OCR overlay tier is **implemented** behind `--features ocr`. See the [OCR Overlay Tier](#ocr-overlay-tier-srcpdfocr-rs) section above for architecture details.
 
-#### Architecture
+**Crate selection rationale:**
 
-OCR will be an **optional feature flag** to keep the default build zero-C-dependency:
+| Crate | Role | Why chosen |
+|-------|------|------------|
+| **`oar-ocr`** (v0.6) | OCR engine | PaddleOCR v5 via ONNX Runtime. Supports per-region bounding boxes with confidence scores. Language-agnostic detection; language-specific recognition via swappable models. |
+| **`pdfium-render`** (v0.8) | PDF → image | Google PDFium via FFI — the only native dependency, accepted because pure-Rust PDF rasterization doesn't exist at comparable quality. |
+| **`ort`** (v2.0.0-rc.12) | ONNX Runtime | `load-dynamic` mode avoids static linking ABI issues — loads `onnxruntime.dll` at runtime. |
 
-```toml
-[features]
-default = []
-ocr = ["dep:ocrs", "dep:image", "dep:pdfium-render"]
+**Non-English support:** Users can swap recognition model and dictionary via `ARCANE_OCR_REC_MODEL` and `ARCANE_OCR_DICT` env vars for other languages (e.g. Chinese, Japanese).
 
-[dependencies.ocrs]
-version = "0.11"
-optional = true
-
-[dependencies.image]
-version = "0.25"
-optional = true
-
-[dependencies.pdfium-render]
-version = "0.8"
-optional = true
-features = ["image"]
-```
-
-Build with OCR support:
-```bash
-cargo build --release --features ocr
-```
-
-#### Crate Selection
-
-| Crate | Role | Why |
-|-------|------|-----|
-| **`ocrs`** (v0.11) | OCR engine | Pure-Rust ONNX inference via RTen. Returns word-level bounding boxes with text. No C dependencies. Latin alphabet support sufficient for English TOC entries. |
-| **`rten`** | ONNX runtime | Transitive dependency via `ocrs`. Pure Rust. |
-| **`image`** (v0.25) | Image buffers | Standard `ImageBuffer` types for OCR input. |
-| **`pdfium-render`** (v0.8) | PDF → image | Renders PDF pages to raster images for OCR input. Uses Google's PDFium via FFI — the only C dependency, accepted because native PDF rasterisation has no pure-Rust equivalent. |
-
-Alternatives considered and rejected:
-- **`ocr-rs`**: Uses PaddleOCR via MNN inference framework. Viable but less mature than `ocrs` in the Rust ecosystem.
-- **`tesseract-rs`**: Wraps Tesseract via C FFI. Heavier dependency chain, requires system-level Tesseract installation.
-
-#### Module Design
-
-A new `src/pdf/ocr.rs` module behind `#[cfg(feature = "ocr")]`:
-
-```rust
-/// Render a single PDF page to an image at the given DPI.
-#[cfg(feature = "ocr")]
-pub fn render_page_to_image(path: &Path, page_index: u32, dpi: u32) -> Result<DynamicImage>;
-
-/// Run OCR on a rendered page image, returning text with bounding boxes.
-#[cfg(feature = "ocr")]
-pub fn ocr_page(image: &DynamicImage) -> Result<Vec<OcrTextBlock>>;
-
-/// Selectively OCR only the TOC pages and page-corner regions.
-/// Returns positioned text suitable for the layout/offset pipeline.
-#[cfg(feature = "ocr")]
-pub fn ocr_toc_pages(
-    path: &Path,
-    toc_pages: (u32, u32),
-    corner_pages: &[u32],
-) -> Result<Vec<PositionedText>>;
-```
-
-```rust
-/// A block of text recognized by OCR with its bounding box.
-pub struct OcrTextBlock {
-    pub text: String,
-    pub x: f32,
-    pub y: f32,
-    pub width: f32,
-    pub height: f32,
-    pub confidence: f32,
-}
-```
-
-#### Pipeline Integration
-
-The `pipeline.rs` orchestrator will route scanned PDFs through Tier 2:
-
-```
-probe() → DocumentKind::Scanned
-    │
-    ├── If --toc-pages provided:
-    │       ocr_toc_pages(path, toc_range, sample_pages)
-    │       → PositionedText (same type as Tier 1)
-    │       → offset::parse_toc_entries() + offset::calculate_offset()
-    │       → inject outlines
-    │
-    └── If no --toc-pages:
-            1. Render first 20 pages at 150 DPI
-            2. Run OCR detection-only pass (bounding boxes, no recognition)
-            3. Use layout heuristics (text density, centering, font height)
-               to identify candidate TOC pages
-            4. OCR only those candidate pages + page corners
-            5. Continue with offset → verify → inject
-```
-
-**Key design decisions:**
-- **Selective OCR**: Never OCR the entire document. Only process TOC pages and page-corner regions (for page-number detection). This keeps the operation fast even for 1000+ page textbooks.
-- **Detection-only first pass**: Use `ocrs` detection model (bounding boxes without text recognition) to find text-dense regions. This is ~5x faster than full recognition and sufficient for identifying TOC page candidates.
-- **Quantized models**: Use FP16 ONNX models for ~2x inference speedup with minimal accuracy loss on printed text.
-- **`--toc-pages` bypass**: When the user provides `--toc-pages`, skip all discovery and target those pages directly. This is the fastest and most reliable path.
-
-#### Boldness Estimation for Scanned Headings
-
-For scanned PDFs, font-size information isn't available from content streams. Instead, heading detection will use the `imageproc` crate for:
-
-1. **Stroke width estimation**: Measure the average stroke width of text in bounding boxes. Bold text has wider strokes.
-2. **Height-based size classification**: Use the bounding box height as a proxy for font size. Cluster these heights using the same Jenks algorithm from `clustering.rs`.
-3. **Centering heuristics**: Text centered on the page (x-position near page midpoint) with large bounding boxes is likely a heading.
-
-This would require adding `imageproc` as an optional dependency under the `ocr` feature flag.
-
-#### Error Handling
-
-A new `OcrError` variant will be added to `PdfError` in `src/error.rs`:
-
-```rust
-#[cfg(feature = "ocr")]
-#[error("OCR error: {0}")]
-Ocr(String),
-```
-
-When OCR is not compiled in (`default` features), `pipeline.rs` returns a clear message:
+**Error handling:** When OCR is not compiled in, `pipeline.rs` logs a warning and returns an empty result:
 ```
 [arcane] Scanned PDF detected — OCR support not available.
          Rebuild with: cargo build --release --features ocr

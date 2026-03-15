@@ -46,6 +46,32 @@ cargo build --release
 # The binary will be at target/release/arcane
 ```
 
+### Building with OCR Support (Optional)
+
+For PDFs with broken font encoding, Arcane can fall back to image-based OCR:
+
+```bash
+cargo build --release --features ocr
+```
+
+You also need the following files in a `models/` directory next to the binary:
+
+| File | Source |
+|------|--------|
+| `pp-ocrv5_mobile_det.onnx` | [oar-ocr v0.3.0](https://github.com/GreatV/oar-ocr/releases/tag/v0.3.0) |
+| `en_pp-ocrv5_mobile_rec.onnx` | [oar-ocr v0.3.0](https://github.com/GreatV/oar-ocr/releases/tag/v0.3.0) |
+| `ppocrv5_en_dict.txt` | [oar-ocr v0.3.0](https://github.com/GreatV/oar-ocr/releases/tag/v0.3.0) |
+| `onnxruntime.dll` (Windows) | [ONNX Runtime v1.24.1](https://github.com/microsoft/onnxruntime/releases/tag/v1.24.1) |
+| `pdfium.dll` (Windows) | [pdfium-binaries](https://github.com/bblanchon/pdfium-binaries/releases) |
+
+Place `pdfium.dll` next to the `arcane` binary. Set `ORT_DYLIB_PATH` if `onnxruntime.dll` is not next to the binary.
+
+For non-English PDFs, override the recognition model and dictionary:
+```bash
+set ARCANE_OCR_REC_MODEL=models/pp-ocrv5_mobile_rec.onnx
+set ARCANE_OCR_DICT=models/ppocrv5_dict.txt
+```
+
 ### Installing Locally
 
 To install Arcane so you can use it from anywhere:
@@ -521,7 +547,7 @@ arcane chunk  "Project" --source "Book Title" --depth 1
 ```
 
 **Tips:**
-- Use `arcane probe` first to confirm the PDF is text-based (scanned PDFs require OCR, which is planned for a future release)
+- Use `arcane probe` first to confirm the PDF is text-based (scanned PDFs require the `--features ocr` build)
 - Increase `--min-font-ratio` (e.g. to 1.4) if too many section headings are detected
 - Use `--depth 1` for chapter-level chunks only; `--depth 2` splits at section level too
 - The `--toc-pages` flag provides ~40% speedup and 100% deterministic matching when you know where the TOC is
@@ -778,7 +804,7 @@ This will:
 
 4. **Outline depth too shallow**: The PDF may have chapters at a deeper outline level. Try `--depth 2` or `--depth 3`.
 
-5. **The PDF is a scanned image**: Use `arcane probe <file>` to check. If the PDF is scanned (image-only), the current version cannot extract text from it. OCR support is planned for a future release.
+5. **The PDF is a scanned image**: Use `arcane probe <file>` to check. If the PDF is scanned (image-only), build with `--features ocr` to enable OCR-based text recognition (see [Building with OCR Support](#building-with-ocr-support-optional) above).
 
 **Solution:**
 ```bash

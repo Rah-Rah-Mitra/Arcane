@@ -131,6 +131,36 @@ Chapter PDFs are written to `~/Arcane/Library/<Project>/Chunks/<Source>/`.
 | `arcane watch <project>` | Watch project directory for new PDFs |
 | `arcane tui` | Launch the interactive terminal UI |
 
+## OCR Support (Optional)
+
+For PDFs with broken font encoding (garbled text extraction), Arcane includes an
+optional OCR overlay tier using PaddleOCR v5 via ONNX Runtime:
+
+```bash
+# Build with OCR
+cargo build --release --features ocr
+
+# Download models (one-time)
+mkdir models
+# From https://github.com/GreatV/oar-ocr/releases/tag/v0.3.0 :
+#   pp-ocrv5_mobile_det.onnx       (detection)
+#   en_pp-ocrv5_mobile_rec.onnx    (English recognition)
+#   ppocrv5_en_dict.txt            (English dictionary)
+# From https://github.com/microsoft/onnxruntime/releases/tag/v1.24.1 :
+#   onnxruntime.dll                (ONNX Runtime — Windows x64)
+# From https://github.com/bblanchon/pdfium-binaries/releases :
+#   pdfium.dll                     (PDFium — place next to arcane binary)
+
+# Set ORT_DYLIB_PATH if not next to binary
+set ORT_DYLIB_PATH=path/to/onnxruntime.dll
+
+# recover-outline now handles encoding-broken PDFs
+arcane recover-outline "book.pdf" --toc-pages 14-20 --output "book-fixed.pdf"
+```
+
+For non-English PDFs, override the recognition model and dictionary via env vars:
+`ARCANE_OCR_REC_MODEL`, `ARCANE_OCR_DICT` (see `src/pdf/ocr.rs` for details).
+
 ## Requirements
 
 - Rust 1.75 or later

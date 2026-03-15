@@ -115,16 +115,57 @@ pub fn recover_outline(
     // Phase 2: Route.
     match probe_result.document_kind {
         DocumentKind::Scanned => {
-            // OCR not yet implemented — return probe-only result.
-            return Ok(RecoveryResult {
-                probe: probe_result,
-                layout: None,
-                offset: None,
-                headings: vec![],
-                chapter_map: BTreeMap::new(),
-                verification: vec![],
-                injected_count: None,
-            });
+            #[cfg(feature = "ocr")]
+            {
+                tracing::info!("Scanned PDF — running Tier 2 OCR on all pages");
+                let all_pages: Vec<u32> = (0..probe_result.total_pages).collect();
+                match tier2_ocr(path, &all_pages, &config, None) {
+                    Ok(h) if !h.is_empty() => {
+                        // Continue the pipeline with OCR-extracted headings below.
+                        // We break out of the match by falling through to Phase 3
+                        // via a separate code path.
+                        return finish_pipeline(
+                            doc,
+                            path,
+                            config,
+                            probe_result,
+                            None,
+                            h,
+                        );
+                    }
+                    Ok(_) => {
+                        tracing::warn!("Tier 2 OCR produced no headings for scanned PDF");
+                    }
+                    Err(e) => {
+                        tracing::warn!("Tier 2 OCR failed: {e:#}");
+                    }
+                }
+                return Ok(RecoveryResult {
+                    probe: probe_result,
+                    layout: None,
+                    offset: None,
+                    headings: vec![],
+                    chapter_map: BTreeMap::new(),
+                    verification: vec![],
+                    injected_count: None,
+                });
+            }
+            #[cfg(not(feature = "ocr"))]
+            {
+                tracing::warn!(
+                    "Scanned PDF detected — OCR not compiled in. \
+                     Rebuild with `cargo build --features ocr` to process this file."
+                );
+                return Ok(RecoveryResult {
+                    probe: probe_result,
+                    layout: None,
+                    offset: None,
+                    headings: vec![],
+                    chapter_map: BTreeMap::new(),
+                    verification: vec![],
+                    injected_count: None,
+                });
+            }
         }
         DocumentKind::Empty => {
             anyhow::bail!("PDF has no usable content");
@@ -149,8 +190,70 @@ pub fn recover_outline(
         });
     }
 
+    // Tier 2 quality fallback: if Tier 1 text is mostly garbled (< 50% alpha),
+    // the PDF has a broken font encoding — re-run on the same pages via OCR.
+    // Uses `let headings = ...` shadowing so no `mut` is needed on the binding.
+    #[cfg(feature = "ocr")]
+    let headings = {
+        let quality = heading_text_quality(&headings);
+        if quality < 0.5 {
+            tracing::info!(
+                "Tier 1 text quality {:.0}% — falling back to OCR on {} candidate pages",
+                quality * 100.0,
+                headings.len()
+            );
+            let pages: Vec<u32> = headings.iter().map(|h| h.page_index).collect();
+            match tier2_ocr(path, &pages, config, Some(&headings)) {
+                Ok(ocr_headings) if !ocr_headings.is_empty() => ocr_headings,
+                Ok(_) => {
+                    tracing::warn!("Tier 2 OCR produced no headings — keeping Tier 1 results");
+                    headings
+                }
+                Err(e) => {
+                    tracing::warn!("Tier 2 OCR failed: {e:#} — keeping Tier 1 results");
+                    headings
+                }
+            }
+        } else {
+            headings
+        }
+    };
+
+    finish_pipeline(doc, path, config, probe_result, Some(layout_result), headings)
+}
+
+// ---------------------------------------------------------------------------
+// Shared pipeline tail (phases 4–6)
+// ---------------------------------------------------------------------------
+
+/// Complete phases 4–6 of the pipeline (offset, verify, inject) and return
+/// the final [`RecoveryResult`].
+///
+/// Extracted so that both the TextBased/Mixed path and the Scanned/OCR path
+/// can share the same logic without duplication.
+fn finish_pipeline(
+    doc: &mut Document,
+    _path: &str,
+    config: &RecoveryConfig,
+    probe_result: ProbeResult,
+    layout_result: Option<LayoutResult>,
+    headings: Vec<HeadingCandidate>,
+) -> Result<RecoveryResult> {
+    if headings.is_empty() {
+        return Ok(RecoveryResult {
+            probe: probe_result,
+            layout: layout_result,
+            offset: None,
+            headings: vec![],
+            chapter_map: BTreeMap::new(),
+            verification: vec![],
+            injected_count: None,
+        });
+    }
+
     // Phase 4: Offset calculation.
-    let offset_result = offset::calculate_offset(doc, Some(&layout_result), config.toc_pages);
+    let offset_result =
+        offset::calculate_offset(doc, layout_result.as_ref(), config.toc_pages);
 
     // Phase 5: Verify headings against page text.
     let verification = verify_headings(doc, &headings, config.fuzzy_threshold);
@@ -184,13 +287,102 @@ pub fn recover_outline(
 
     Ok(RecoveryResult {
         probe: probe_result,
-        layout: Some(layout_result),
+        layout: layout_result,
         offset: offset_result,
         headings: heading_infos,
         chapter_map,
         verification,
         injected_count,
     })
+}
+
+// ---------------------------------------------------------------------------
+// Heading text quality helper (always compiled)
+// ---------------------------------------------------------------------------
+
+#[cfg_attr(not(feature = "ocr"), allow(dead_code))]
+/// Returns the ratio of alphabetic characters across all heading texts (0.0–1.0).
+///
+/// Values below ~0.5 indicate garbled font encoding (e.g. non-standard
+/// `ToUnicode` mappings that map bytes to `~` or null bytes).  The OCR tier
+/// uses this as its trigger threshold.
+fn heading_text_quality(headings: &[HeadingCandidate]) -> f32 {
+    let total: usize = headings.iter().map(|h| h.text.len()).sum();
+    if total == 0 {
+        return 0.0;
+    }
+    let alpha: usize = headings
+        .iter()
+        .flat_map(|h| h.text.chars())
+        .filter(|c| c.is_alphabetic())
+        .count();
+    alpha as f32 / total as f32
+}
+
+// ---------------------------------------------------------------------------
+// Tier 2: OCR-based extraction (feature-gated)
+// ---------------------------------------------------------------------------
+
+/// Tier 2 extraction — render pages via pdfium and recognise text with oar-ocr.
+///
+/// Only compiled when the `ocr` Cargo feature is enabled.
+///
+/// When `tier1_headings` is provided, OCR results are filtered to only keep
+/// regions whose font size is within 50% of a Tier 1 heading on the same page.
+/// This uses Tier 1's correct font-size discrimination while replacing the
+/// garbled text with OCR-recognised text.
+#[cfg(feature = "ocr")]
+fn tier2_ocr(
+    path: &str,
+    candidate_pages: &[u32],
+    _config: &RecoveryConfig,
+    tier1_headings: Option<&[HeadingCandidate]>,
+) -> Result<Vec<HeadingCandidate>> {
+    use super::ocr;
+    let positioned = ocr::extract_headings_ocr(
+        std::path::Path::new(path),
+        candidate_pages,
+        150, // 150 DPI: ~0.3 s/page, good enough for headings
+    )?;
+
+    // Build a per-page set of Tier 1 heading font sizes for filtering.
+    let tier1_sizes: std::collections::HashMap<u32, Vec<f32>> = tier1_headings
+        .map(|hs| {
+            let mut map: std::collections::HashMap<u32, Vec<f32>> =
+                std::collections::HashMap::new();
+            for h in hs {
+                map.entry(h.page_index).or_default().push(h.font_size);
+            }
+            map
+        })
+        .unwrap_or_default();
+
+    let headings = positioned
+        .into_iter()
+        .filter(|pt| !pt.text.is_empty())
+        .filter(|pt| {
+            // If we have Tier 1 reference sizes, only keep OCR regions whose
+            // font size is within 50% of some Tier 1 heading on the same page.
+            if let Some(sizes) = tier1_sizes.get(&pt.page_index) {
+                sizes.iter().any(|&s| {
+                    let ratio = pt.font_size / s;
+                    (0.5..=1.5).contains(&ratio)
+                })
+            } else {
+                // No Tier 1 reference for this page (e.g. scanned PDF) — keep all.
+                true
+            }
+        })
+        .map(|pt| HeadingCandidate {
+            page_index: pt.page_index,
+            font_size: pt.font_size,
+            text: pt.text,
+            y_position: Some(pt.y),
+            // Coarse depth assignment: larger boxes → top-level headings.
+            depth_level: if pt.font_size > 20.0 { 1 } else { 2 },
+        })
+        .collect();
+    Ok(headings)
 }
 
 // ---------------------------------------------------------------------------
