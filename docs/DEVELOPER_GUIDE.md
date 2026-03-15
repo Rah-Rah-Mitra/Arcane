@@ -67,6 +67,7 @@ src/
 │   ├── page_labels.rs      # /PageLabels parsing and resolution
 │   ├── text.rs             # Text extraction from PDF pages
 │   ├── ocr.rs              # OCR overlay tier (optional, behind `ocr` feature flag)
+│   ├── seed.rs             # Seeded outline recovery (reference PDF / JSON seed file)
 │   ├── ops.rs              # Structural PDF operations (merge, split, rotate, encrypt)
 │   └── writer.rs           # Low-level PDF writing helpers
 ├── search/
@@ -149,6 +150,7 @@ The CLI layer uses `clap` derive macros for declarative command definitions in `
 - `cmd_tag()` / `cmd_untag()`: Tag management
 - `cmd_merge()` / `cmd_split()` / `cmd_rotate()`: Structural PDF operations
 - `cmd_protect()` / `cmd_unlock()`: PDF encryption
+- `cmd_ocr()`: Runs OCR on a page range and outputs recognized text (requires `--features ocr`)
 - `cmd_init_ocr()`: Downloads OCR models + runtime DLLs to `~/Arcane/models/`
 - `cmd_watch()`: File system watcher
 - `cmd_tui()`: Interactive terminal UI
@@ -246,7 +248,8 @@ offset = physical_index - logical_page_number
 - **`chunk_pdf(meta, chunks_dir, depth)`** (`engine.rs`): Main entry point for chunking
 - **`detect_boundaries(meta, depth)`** (`engine.rs`): Detect boundaries without writing (for `--dry-run`)
 - **`resolve_chapters(meta, doc, depth)`** (`engine.rs`): Unified chapter detection strategy
-- **`extract_chapters_with_depth(doc, depth)`** (`outlines.rs`): Depth-aware outline walker
+- **`extract_chapters_with_depth(doc, depth)`** (`outlines.rs`): Depth-aware outline walker (returns `BTreeMap<u32, String>`)
+- **`extract_chapters_with_depth_and_level(doc, depth)`** (`outlines.rs`): Depth-preserving outline walker (returns `Vec<(u32, String, u32)>` — page, title, depth_level)
 - **`extract_chapters_from_page_labels(doc)`** (`page_labels.rs`): Page label parsing
 - **`boundaries_to_ranges(chapters, total)`** (`engine.rs`): Convert boundaries to page ranges
 - **`write_chunk(doc, start, end, path)`** (`engine.rs`): BFS-based minimal page extraction
@@ -350,7 +353,8 @@ pipeline.rs (orchestrator)
     │       │
     │       ├── Strategy 1: /PageLabels number tree
     │       ├── Strategy 2: TOC matching (fuzzy, via strsim)
-    │       └── Strategy 3: Header/footer page-number consensus
+    │       ├── Strategy 3: Header/footer page-number consensus
+    │       └── Strategy 4: Seed-based vote (via seed.rs)
     └── heuristics.rs    — Heading extraction + outline injection
             │
             ├── inject_outlines()                — Flat /Outlines tree
@@ -368,10 +372,45 @@ pipeline.rs (orchestrator)
 - `LayoutAnchor` / `AnchorKind` — structural element with Bayesian confidence score
 - `OffsetResult` / `OffsetMethod` — page offset with confidence score and evidence chain
 - `PageSyncResult` / `SyncMatch` — RANSAC consensus offset output
-- `RecoveryConfig` — pipeline configuration (min_font_ratio, depth, toc_pages, fuzzy_threshold)
-- `RecoveryResult` — full pipeline output (probe, layout, offset, headings, verification, injection count)
+- `RecoveryConfig` — pipeline configuration (min_font_ratio, depth, toc_pages, fuzzy_threshold, page_shift_tolerance)
+- `RecoveryResult` — full pipeline output (probe, layout, offset, headings, verification, injection count, seed_verification)
+- `SeedEntry` / `ResolvedSeed` / `SeedStatus` — seed-based recovery types (title, page, depth, Confirmed/Estimated/OutOfRange)
 
-The pipeline is designed so each module can be used independently via CLI sub-commands (`probe`, `detect-layout`, `find-offset`, `sync-pages`) or composed together for the full `recover-outline` flow.
+The pipeline is designed so each module can be used independently via CLI sub-commands (`probe`, `detect-layout`, `find-offset`, `sync-pages`, `ocr`) or composed together for the full `recover-outline` flow.
+
+#### Seeded Outline Recovery (`src/pdf/seed.rs`)
+
+When a PDF has broken font encoding (garbled text), heuristic heading detection fails entirely. The seeded recovery path bypasses detection by accepting known chapter titles from a reference source:
+
+```
+--seed-pdf ref.pdf  →  load_seeds_from_pdf()  ─┐
+--seed-file x.json  →  load_seeds_from_json()  ─┤
+                                                 │  Vec<SeedEntry>
+                                       recover_outline_seeded()
+                                                 │
+                        ┌────────────────────────┤
+                        │                        │
+                    probe(target)    calculate_offset_from_seeds()
+                        │            offset vote (-T..+T) → winner
+                        │                        │
+                        └─── resolve_seeds() ────┘  (or verify_seeds_ocr() w/ OCR)
+                                                 │
+                             seeds_to_headings() │
+                                                 │  Vec<HeadingCandidate>
+                                         finish_pipeline(override_offset)
+                                                 │
+                              RecoveryResult { seed_verification: Some([...]) }
+```
+
+**Key functions:**
+- `load_seeds_from_pdf(ref_path, max_depth)` — extracts `/Outlines` from a reference PDF via `extract_chapters_with_depth_and_level()`
+- `load_seeds_from_json(path)` — parses `[{"title": "...", "page": N, "depth": D}]` (1-based pages converted to 0-based)
+- `calculate_offset_from_seeds(seeds, doc, threshold, tolerance)` — vote-based consensus: for each candidate offset `d` in `[-T, +T]`, extracts page text, fuzzy-matches against seed titles, returns the most-voted offset
+- `resolve_seeds(seeds, offset, doc, threshold, tolerance)` — text-based page verification (always compiled)
+- `verify_seeds_ocr(seeds, offset, path, threshold, tolerance, total_pages)` — OCR-based verification (`#[cfg(feature = "ocr")]`)
+- `seeds_to_headings(resolved)` — converts `ResolvedSeed` → `HeadingCandidate`, skipping `OutOfRange` entries
+
+**Offset fallback logic:** When seed vote returns `None` (garbled text gives 0 similarity for all seeds) and standard `offset::calculate_offset()` confidence < 30%, the pipeline defaults to offset=0 — correct for same-book copies where pages are at identical positions.
 
 #### OCR Overlay Tier (`src/pdf/ocr.rs`)
 
@@ -382,8 +421,8 @@ Behind the `ocr` feature flag, Arcane includes an OCR overlay tier for PDFs with
 - **ort (load-dynamic)**: Loads ONNX Runtime at runtime via `ORT_DYLIB_PATH`
 
 ```
-extract_headings_ocr(path, page_indices, dpi)
-    │
+extract_headings_ocr(path, page_indices, dpi)    → Vec<PositionedText>
+    │                                               (heading-sized regions only)
     ├── ensure_ort_loaded()      — OnceLock-guarded DLL init (once per process)
     ├── get_ocr_engine()         — OnceLock-cached OAROCR (built once, reused)
     ├── bind_pdfium()            — ~/Arcane/models/ → CWD → system search
@@ -391,7 +430,17 @@ extract_headings_ocr(path, page_indices, dpi)
     ├── Phase 2: batch predict   — Chunks of 16 images → single predict() call
     ├── Filter box_h ≥ 1.5%     — Keep heading-sized regions only
     └── Pixel → PDF coords      — Flip Y, scale by 72/dpi → PositionedText
+
+extract_text_ocr(path, page_indices, dpi)        → Vec<OcrPageResult>
+    │                                               (all text, not just headings)
+    ├── Same render + batch pipeline as above
+    ├── No bounding-box height filter (returns everything)
+    ├── Lower confidence threshold (0.4 vs 0.6)
+    └── Returns OcrPageResult { page_index, regions: Vec<OcrRegion> }
+        └── OcrRegion { text, confidence, x, y, font_size }
 ```
+
+The `arcane ocr` command uses `extract_text_ocr()` to expose full OCR output to users. `OcrPageResult::full_text()` sorts regions top-to-bottom then left-to-right and joins with newlines.
 
 **Model path resolution** (env var → `~/Arcane/models/` → `models/` CWD-relative):
 - `pp-ocrv5_mobile_det.onnx` — detection (language-agnostic)

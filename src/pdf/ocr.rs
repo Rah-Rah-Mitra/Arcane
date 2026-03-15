@@ -153,6 +153,44 @@ fn bind_pdfium() -> Result<Pdfium> {
 /// Maximum images per OCR batch to limit memory usage.
 const BATCH_SIZE: usize = 16;
 
+/// A single recognized text region from OCR.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct OcrRegion {
+    /// The recognized text.
+    pub text: String,
+    /// Confidence score (0.0–1.0).
+    pub confidence: f32,
+    /// X coordinate in PDF points.
+    pub x: f32,
+    /// Y coordinate in PDF points.
+    pub y: f32,
+    /// Estimated font size in PDF points.
+    pub font_size: f32,
+}
+
+/// Per-page OCR result.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct OcrPageResult {
+    /// 0-based page index.
+    pub page_index: u32,
+    /// All recognized text regions on this page, in reading order (top-to-bottom).
+    pub regions: Vec<OcrRegion>,
+}
+
+impl OcrPageResult {
+    /// Concatenate all regions into a single string with newlines between lines.
+    pub fn full_text(&self) -> String {
+        // Sort regions top-to-bottom (descending Y in PDF coords), then left-to-right.
+        let mut sorted: Vec<&OcrRegion> = self.regions.iter().collect();
+        sorted.sort_by(|a, b| {
+            b.y.partial_cmp(&a.y)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal))
+        });
+        sorted.iter().map(|r| r.text.as_str()).collect::<Vec<_>>().join("\n")
+    }
+}
+
 /// Render the given 0-based `page_indices` of the PDF at `dpi`, run OAR-OCR,
 /// and return heading-sized text regions as `PositionedText`.
 ///
@@ -261,4 +299,102 @@ pub fn extract_headings_ocr(
     }
 
     Ok(results)
+}
+
+/// Render the given 0-based `page_indices` of the PDF at `dpi`, run OAR-OCR,
+/// and return **all** recognized text (not just headings).
+///
+/// Unlike [`extract_headings_ocr`], this does not filter by bounding-box height
+/// — every region with confidence ≥ 0.4 is returned.
+pub fn extract_text_ocr(
+    path: &Path,
+    page_indices: &[u32],
+    dpi: u32,
+) -> Result<Vec<OcrPageResult>> {
+    if page_indices.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    ensure_ort_loaded()?;
+    let ocr = get_ocr_engine()?;
+    let pdfium = bind_pdfium()?;
+    let doc = pdfium
+        .load_pdf_from_file(path, None)
+        .context("pdfium: failed to open PDF")?;
+
+    let scale = dpi as f32 / 72.0;
+
+    // Render pages to images.
+    let mut images = Vec::with_capacity(page_indices.len());
+    let mut meta: Vec<(u32, f32)> = Vec::with_capacity(page_indices.len());
+
+    for &page_idx in page_indices {
+        let page = doc
+            .pages()
+            .get(page_idx as u16)
+            .with_context(|| format!("pdfium: page {page_idx} out of range"))?;
+
+        let page_h_pts = page.height().value;
+        let render_config = PdfRenderConfig::new().scale_page_by_factor(scale);
+        let dynamic_img = page
+            .render_with_config(&render_config)
+            .context("pdfium: page render failed")?
+            .as_image();
+
+        images.push(dynamic_img.to_rgb8());
+        meta.push((page_idx, page_h_pts));
+    }
+
+    // Batch OCR.
+    let mut page_results: Vec<OcrPageResult> = Vec::new();
+    let mut img_idx = 0;
+
+    while !images.is_empty() {
+        let batch_size = images.len().min(BATCH_SIZE);
+        let batch: Vec<_> = images.drain(..batch_size).collect();
+        let batch_meta = &meta[img_idx..img_idx + batch_size];
+        img_idx += batch_size;
+
+        let outputs = ocr.predict(batch).context("OCR batch predict failed")?;
+
+        for (i, output) in outputs.iter().enumerate() {
+            let (page_idx, page_h_pts) = batch_meta[i];
+            let mut regions = Vec::new();
+
+            for region in &output.text_regions {
+                let Some((text, confidence)) = region.text_with_confidence() else {
+                    continue;
+                };
+                if confidence < 0.4 {
+                    continue;
+                }
+
+                let bbox = &region.bounding_box;
+                let x_pt = bbox.x_min() / scale;
+                let y_pt = page_h_pts - (bbox.y_max() / scale);
+                let box_h_px = bbox.y_max() - bbox.y_min();
+                let font_size_pt = box_h_px / scale;
+
+                let trimmed = text.trim().to_string();
+                if trimmed.is_empty() {
+                    continue;
+                }
+
+                regions.push(OcrRegion {
+                    text: trimmed,
+                    confidence,
+                    x: x_pt,
+                    y: y_pt,
+                    font_size: font_size_pt,
+                });
+            }
+
+            page_results.push(OcrPageResult {
+                page_index: page_idx,
+                regions,
+            });
+        }
+    }
+
+    Ok(page_results)
 }

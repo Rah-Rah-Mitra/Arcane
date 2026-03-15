@@ -499,13 +499,37 @@ pub fn cmd_recover_outline(
     no_inject: bool,
     fuzzy_threshold: f64,
     json: bool,
+    seed_pdf: Option<std::path::PathBuf>,
+    seed_file: Option<std::path::PathBuf>,
+    seed_tolerance: u32,
 ) -> Result<()> {
     use crate::pdf::pipeline::{self, RecoveryConfig};
+    use crate::pdf::seed;
 
     let mut doc = lopdf::Document::load(&file)
         .with_context(|| format!("failed to open PDF at {}", file.display()))?;
 
     let toc_range = toc_pages.as_deref().and_then(parse_page_range);
+
+    // Load seeds from reference PDF or JSON file (mutually exclusive).
+    let seeds = match (seed_pdf, seed_file) {
+        (Some(ref_path), None) => {
+            let entries = seed::load_seeds_from_pdf(&ref_path, depth)
+                .with_context(|| format!("failed to load seeds from {}", ref_path.display()))?;
+            println!("[arcane] Loaded {} seed entries from reference PDF.", entries.len());
+            Some(entries)
+        }
+        (None, Some(json_path)) => {
+            let entries = seed::load_seeds_from_json(&json_path)
+                .with_context(|| format!("failed to load seed file {}", json_path.display()))?;
+            println!("[arcane] Loaded {} seed entries from JSON file.", entries.len());
+            Some(entries)
+        }
+        (Some(_), Some(_)) => {
+            anyhow::bail!("--seed-pdf and --seed-file are mutually exclusive");
+        }
+        (None, None) => None,
+    };
 
     let config = RecoveryConfig {
         min_font_ratio: min_font_ratio as f32,
@@ -514,10 +538,17 @@ pub fn cmd_recover_outline(
         dry_run,
         inject: !no_inject,
         fuzzy_threshold,
+        page_shift_tolerance: seed_tolerance,
     };
 
-    let result = pipeline::recover_outline(&mut doc, &file.display().to_string(), &config)
-        .context("outline recovery pipeline failed")?;
+    let path_str = file.display().to_string();
+    let result = if let Some(seed_entries) = seeds {
+        pipeline::recover_outline_seeded(&mut doc, &path_str, &config, seed_entries)
+            .context("seeded outline recovery pipeline failed")?
+    } else {
+        pipeline::recover_outline(&mut doc, &path_str, &config)
+            .context("outline recovery pipeline failed")?
+    };
 
     // JSON output.
     if json {
@@ -587,6 +618,37 @@ pub fn cmd_recover_outline(
             "\nVerification: {}/{} headings confirmed on target pages.",
             verified_count, total
         );
+    }
+
+    // Print seed verification table (when --seed-pdf / --seed-file was used).
+    if let Some(ref seed_ver) = result.seed_verification {
+        use crate::pdf::seed::SeedStatus;
+        let confirmed = seed_ver
+            .iter()
+            .filter(|s| s.status == SeedStatus::Confirmed)
+            .count();
+        let estimated = seed_ver
+            .iter()
+            .filter(|s| s.status == SeedStatus::Estimated)
+            .count();
+        let out_of_range = seed_ver
+            .iter()
+            .filter(|s| s.status == SeedStatus::OutOfRange)
+            .count();
+        println!(
+            "\nSeed verification: {} confirmed, {} estimated, {} out-of-range",
+            confirmed, estimated, out_of_range
+        );
+        println!("  {:<5} {:<6} {}", "Page", "Status", "Title");
+        println!("  {}", "\u{2500}".repeat(72));
+        for s in seed_ver {
+            let flag = match s.status {
+                SeedStatus::Confirmed => "OK ",
+                SeedStatus::Estimated => "EST",
+                SeedStatus::OutOfRange => "OOR",
+            };
+            println!("  p{:<4} [{}]  {}", s.target_page + 1, flag, s.title);
+        }
     }
 
     if dry_run {
@@ -1421,6 +1483,58 @@ pub fn cmd_sync_pages(
     }
 
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// ocr — run OCR on a page range and output the recognised text
+// ---------------------------------------------------------------------------
+
+pub fn cmd_ocr(
+    file: PathBuf,
+    pages: String,
+    dpi: u32,
+    json: bool,
+) -> Result<()> {
+    #[cfg(not(feature = "ocr"))]
+    {
+        let _ = (&file, &pages, dpi, json);
+        anyhow::bail!(
+            "OCR support is not compiled in.\n\
+             Rebuild with: cargo build --release --features ocr\n\
+             Then run: arcane init-ocr"
+        );
+    }
+
+    #[cfg(feature = "ocr")]
+    {
+        use crate::pdf::ocr;
+
+        let (start, end) = parse_page_range(&pages)
+            .context("invalid --pages range (expected e.g. \"1-5\" or \"14-20\")")?;
+
+        // Convert from 1-based inclusive to 0-based page indices.
+        let page_indices: Vec<u32> = (start..=end).collect();
+
+        let results =
+            ocr::extract_text_ocr(&file, &page_indices, dpi).context("OCR extraction failed")?;
+
+        if json {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&results)
+                    .context("failed to serialise OCR results")?
+            );
+        } else {
+            for page in &results {
+                let display_page = page.page_index + 1;
+                println!("--- Page {} ---", display_page);
+                println!("{}", page.full_text());
+                println!();
+            }
+        }
+
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -45,6 +45,8 @@ pub enum OffsetMethod {
     PageNumberDetection,
     /// User-supplied via `--toc-pages`.
     UserSupplied,
+    /// Derived from matching seed chapter titles against the target document.
+    SeedBased,
 }
 
 /// A single piece of evidence supporting the offset calculation.

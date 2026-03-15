@@ -74,6 +74,9 @@ fn main() -> anyhow::Result<()> {
             no_inject,
             fuzzy_threshold,
             json,
+            seed_pdf,
+            seed_file,
+            seed_tolerance,
         } => commands::cmd_recover_outline(
             file,
             output,
@@ -84,6 +87,9 @@ fn main() -> anyhow::Result<()> {
             no_inject,
             fuzzy_threshold,
             json,
+            seed_pdf,
+            seed_file,
+            seed_tolerance,
         ),
         Commands::Outline { file, depth } => commands::cmd_outline(file, depth),
         Commands::Remove { project, source } => commands::cmd_remove(&project, source.as_deref()),
@@ -135,6 +141,12 @@ fn main() -> anyhow::Result<()> {
             threshold,
             json,
         } => commands::cmd_sync_pages(file, toc_pages, threshold, json),
+        Commands::Ocr {
+            file,
+            pages,
+            dpi,
+            json,
+        } => commands::cmd_ocr(file, pages, dpi, json),
         Commands::InitOcr {
             models_dir,
             skip_runtime,

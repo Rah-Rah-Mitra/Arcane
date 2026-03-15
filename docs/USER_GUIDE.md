@@ -523,6 +523,9 @@ Recovers and injects outline bookmarks into PDFs that have no `/Outlines`, using
 - `--no-inject`: Run the full pipeline but skip injection (useful with `--json` for inspection)
 - `--fuzzy-threshold T`: Minimum similarity (0.0–1.0) for heading verification (default: 0.6)
 - `--json`: Output the full pipeline result as JSON (probe, layout, offset, headings, verification)
+- `--seed-pdf PATH`: Path to a reference PDF whose `/Outlines` provide ground-truth chapter titles (see [Seeded Recovery](#seeded-outline-recovery) below)
+- `--seed-file PATH`: Path to a JSON file with known chapter titles and page numbers (alternative to `--seed-pdf`)
+- `--seed-tolerance N`: ±N page search window when locating seed titles in the target PDF (default: 5)
 
 **Workflow:**
 ```bash
@@ -560,6 +563,112 @@ arcane chunk  "Project" --source "Book Title" --depth 1
 - The `--toc-pages` flag provides ~40% speedup and 100% deterministic matching when you know where the TOC is
 - LaTeX books (Computer Modern fonts: CMBX12, CMBX17) work particularly well
 - Use `--json` to pipe results into other tools or scripts
+
+#### Seeded Outline Recovery
+
+When a PDF has broken font encoding (garbled text like `~`, `I-I'`, `[jJ` instead of chapter titles), the heuristic pipeline detects headings at the right positions but cannot read their names. If you have a reference copy of the same book with a working outline, you can **seed** the recovery with known titles using `--seed-pdf`:
+
+```bash
+# Use a reference PDF's outline as ground-truth titles
+arcane recover-outline "broken-copy.pdf" \
+  --seed-pdf "good-copy.pdf" \
+  --seed-tolerance 3 \
+  --depth 1 \
+  --output "fixed-copy.pdf"
+```
+
+The seeded pipeline:
+1. Extracts the outline from the reference PDF (titles + physical page numbers + depth levels)
+2. Calculates the page offset between the two PDFs using a vote-based consensus algorithm
+3. Verifies each seed title against the target PDF's page text (via OCR if compiled, or text extraction)
+4. Injects the verified outline with correct titles and page destinations
+
+Each seed entry is reported as one of:
+- **OK** — title was confirmed on the target page (text or OCR match ≥ threshold)
+- **EST** — title could not be confirmed (garbled text); the page number is estimated from the offset
+- **OOR** — the computed target page is outside the document's page range
+
+**Example output:**
+```
+Seed verification: 5 confirmed, 14 estimated, 0 out-of-range
+  Page  Status Title
+  ────────────────────────────────────────────────────────────────────────
+  p1    [EST]  Front Matter
+  p21   [OK ]  1 Introduction
+  p35   [EST]  2 Representation of a Three-Dimensional Moving Scene
+  ...
+```
+
+If you don't have a reference PDF, you can create a JSON seed file manually:
+
+```json
+[
+  {"title": "1 Introduction", "page": 21},
+  {"title": "2 Sorting Algorithms", "page": 35, "depth": 1},
+  {"title": "A Appendix", "page": 461}
+]
+```
+
+Then use `--seed-file seeds.json` instead of `--seed-pdf`. Pages are 1-based (matching `arcane outline` display). The `depth` field is optional and defaults to 1.
+
+### `arcane ocr <file> --pages <RANGE> [--dpi N] [--json]`
+
+Runs OCR on a page range of any PDF and outputs the recognised text. Requires a build with OCR support (`--features ocr`) and models downloaded via `arcane init-ocr`.
+
+**Options:**
+- `--pages RANGE`: Page range to OCR (1-based, e.g. "1-5" or "14-20") — **required**
+- `--dpi N`: Render resolution in dots per inch (default: 150). Higher values improve accuracy at the cost of speed and memory
+- `--json`: Output structured JSON with coordinates, font sizes, and confidence scores for each text region
+
+**Examples:**
+
+Read the table of contents from a scanned book:
+```bash
+arcane ocr ~/Books/scanned-book.pdf --pages "5-8"
+```
+
+Extract text from specific pages at higher resolution:
+```bash
+arcane ocr ~/Books/textbook.pdf --pages "14-20" --dpi 300
+```
+
+Get structured OCR output for scripting:
+```bash
+arcane ocr ~/Books/textbook.pdf --pages "1-3" --json
+```
+
+**Human-readable output:**
+```
+--- Page 14 ---
+Contents
+1 Introduction 1
+2 Sorting Algorithms 15
+3 Graph Theory 42
+...
+
+--- Page 15 ---
+4 Dynamic Programming 78
+5 Greedy Algorithms 102
+...
+```
+
+**JSON output** includes per-region detail:
+```json
+[
+  {
+    "page_index": 13,
+    "regions": [
+      {"text": "Contents", "confidence": 0.98, "x": 200.0, "y": 650.0, "font_size": 24.0},
+      {"text": "1 Introduction 1", "confidence": 0.95, "x": 100.0, "y": 600.0, "font_size": 12.0}
+    ]
+  }
+]
+```
+
+**Tips:**
+- Use 150 DPI (the default) for speed; increase to 200–300 DPI for small or dense text
+- Pipe `--json` output to `jq` for filtering: `arcane ocr book.pdf --pages "1-3" --json | jq '.[].regions[].text'`
+- Combine with `recover-outline --seed-file` to manually build an outline from OCR'd TOC pages
 
 ### `arcane init-ocr [--models-dir DIR] [--skip-runtime] [--force]`
 
@@ -690,9 +799,12 @@ Arcane includes a full pipeline for analysing and recovering the structure of PD
 ```
 arcane probe book.pdf                  # Step 1: Is it text-based or scanned?
 arcane detect-layout book.pdf          # Step 2: What headings / font distribution does it have?
+arcane ocr book.pdf --pages "5-8"      # Step 2 alt: Read pages via OCR (for scanned/garbled PDFs)
 arcane sync-pages book.pdf             # Step 3: Find the physical↔printed page offset (RANSAC)
 arcane find-offset book.pdf            # Step 3 alt: Simpler offset detection (PageLabels / TOC)
 arcane recover-outline book.pdf        # Step 4: Inject recovered bookmarks into the PDF
+arcane recover-outline book.pdf \
+  --seed-pdf reference.pdf             # Step 4 alt: Seed from a reference copy with known outline
 arcane outline book-recovered.pdf      # Step 5: Verify the injected outline looks right
 ```
 
@@ -720,6 +832,56 @@ arcane outline ~/Books/vision-fixed.pdf --depth 3
 # Add the fixed copy to your project and chunk it
 arcane add "Computer Vision" ~/Books/vision-fixed.pdf --textbook --title "3-D Vision"
 arcane chunk "Computer Vision" --source "3-D Vision" --depth 1
+```
+
+### Workflow: Recovering an Outline from a Reference Copy
+
+When you have a PDF with broken font encoding (garbled chapter titles) but you also have a clean copy of the same book with a working outline:
+
+```bash
+# Check the target PDF — confirm it's garbled
+arcane probe ~/Books/vision-garbled.pdf
+arcane recover-outline ~/Books/vision-garbled.pdf --dry-run
+# → headings detected but titles are symbols like ~, [jJ, I-I'
+
+# Verify the reference copy has a good outline
+arcane outline ~/Books/vision-clean.pdf
+
+# Seed recovery from the reference and write a fixed copy
+arcane recover-outline ~/Books/vision-garbled.pdf \
+  --seed-pdf ~/Books/vision-clean.pdf \
+  --seed-tolerance 3 \
+  --depth 1 \
+  --output ~/Books/vision-fixed.pdf
+
+# Verify the result
+arcane outline ~/Books/vision-fixed.pdf
+```
+
+### Workflow: Building an Outline from OCR'd TOC Pages
+
+When there is no reference copy, you can OCR the table-of-contents pages and manually create a seed file:
+
+```bash
+# OCR the TOC pages (requires --features ocr build + arcane init-ocr)
+arcane ocr ~/Books/textbook.pdf --pages "5-8"
+
+# From the OCR output, create a JSON seed file with the chapter titles and pages:
+# seeds.json:
+# [
+#   {"title": "1 Introduction", "page": 1},
+#   {"title": "2 Sorting Algorithms", "page": 15},
+#   {"title": "3 Graph Theory", "page": 42}
+# ]
+
+# Use the seed file to inject the outline
+arcane recover-outline ~/Books/textbook.pdf \
+  --seed-file seeds.json \
+  --depth 1 \
+  --output ~/Books/textbook-fixed.pdf
+
+# Verify
+arcane outline ~/Books/textbook-fixed.pdf
 ```
 
 ### Understanding `body_font_size`

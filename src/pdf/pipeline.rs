@@ -13,8 +13,10 @@ use serde::{Deserialize, Serialize};
 use super::clustering::{assign_roles, cluster_font_sizes, FontCluster};
 use super::heuristics::{self, HeadingCandidate};
 use super::layout::{self, LayoutResult};
-use super::offset::{self, OffsetResult};
+use super::offset::{self, OffsetMethod, OffsetResult};
 use super::probe::{self, DocumentKind, ProbeResult};
+use super::seed::{self, ResolvedSeed, SeedEntry};
+// SeedEntry is used in recover_outline_seeded's public parameter.
 
 // ---------------------------------------------------------------------------
 // Configuration & result types
@@ -34,6 +36,8 @@ pub struct RecoveryConfig {
     pub inject: bool,
     /// Minimum fuzzy-match similarity for verification.
     pub fuzzy_threshold: f64,
+    /// ±N page tolerance window when locating seeds in the target PDF.
+    pub page_shift_tolerance: u32,
 }
 
 /// Full pipeline result.
@@ -53,6 +57,9 @@ pub struct RecoveryResult {
     pub verification: Vec<VerificationEntry>,
     /// Number of outline entries injected (None if dry-run or skipped).
     pub injected_count: Option<usize>,
+    /// Seed verification results (present when --seed-pdf or --seed-file was used).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seed_verification: Option<Vec<ResolvedSeed>>,
 }
 
 /// Serialisable heading info (subset of HeadingCandidate).
@@ -124,7 +131,7 @@ pub fn recover_outline(
                         // Continue the pipeline with OCR-extracted headings below.
                         // We break out of the match by falling through to Phase 3
                         // via a separate code path.
-                        return finish_pipeline(doc, path, config, probe_result, None, h);
+                        return finish_pipeline(doc, path, config, probe_result, None, h, None);
                     }
                     Ok(_) => {
                         tracing::warn!("Tier 2 OCR produced no headings for scanned PDF");
@@ -141,6 +148,7 @@ pub fn recover_outline(
                     chapter_map: BTreeMap::new(),
                     verification: vec![],
                     injected_count: None,
+                    seed_verification: None,
                 });
             }
             #[cfg(not(feature = "ocr"))]
@@ -157,6 +165,7 @@ pub fn recover_outline(
                     chapter_map: BTreeMap::new(),
                     verification: vec![],
                     injected_count: None,
+                    seed_verification: None,
                 });
             }
         }
@@ -180,6 +189,7 @@ pub fn recover_outline(
             chapter_map: BTreeMap::new(),
             verification: vec![],
             injected_count: None,
+            seed_verification: None,
         });
     }
 
@@ -219,7 +229,156 @@ pub fn recover_outline(
         probe_result,
         Some(layout_result),
         headings,
+        None,
     )
+}
+
+// ---------------------------------------------------------------------------
+// Seeded pipeline entry point
+// ---------------------------------------------------------------------------
+
+/// Run the seeded outline recovery pipeline.
+///
+/// Uses `seeds` (from `--seed-pdf` or `--seed-file`) as ground-truth chapter
+/// titles, bypassing heuristic/OCR heading *detection*.  OCR or text search
+/// is used only to *verify* which physical page each seed title lands on.
+///
+/// Flow:
+/// 1. **Probe** — classify document type.
+/// 2. **Offset from seeds** — vote over candidate offsets; fall back to
+///    standard detection if the vote is inconclusive.
+/// 3. **Resolve** — locate each seed in the target PDF (OCR when available,
+///    otherwise lopdf text extraction).
+/// 4. **Convert** — seeds → `HeadingCandidate` list.
+/// 5. **Finish** — phases 5 & 6 (verify + inject) via `finish_pipeline`.
+pub fn recover_outline_seeded(
+    doc: &mut Document,
+    path: &str,
+    config: &RecoveryConfig,
+    seeds: Vec<SeedEntry>,
+) -> Result<RecoveryResult> {
+    // Phase 1: Probe.
+    let probe_result = probe::probe(doc, path);
+    let _total_pages = probe_result.total_pages;
+    #[cfg(feature = "ocr")]
+    let total_pages = _total_pages;
+
+    // Phase 2: Offset from seeds.
+    // Use a lower internal threshold (0.15) for the vote so that even partially-
+    // readable text produces a signal.  The full fuzzy_threshold is reserved for
+    // seed *verification* (resolve_seeds / verify_seeds_ocr).
+    let vote_threshold = config.fuzzy_threshold.min(0.15);
+    let (offset, seed_offset_result) = match seed::calculate_offset_from_seeds(
+        &seeds,
+        doc,
+        vote_threshold,
+        config.page_shift_tolerance,
+    ) {
+        Some((off, conf)) => {
+            tracing::info!(
+                "Seed offset vote: offset={off} confidence={:.0}%",
+                conf * 100.0
+            );
+            let result = OffsetResult {
+                offset: off,
+                confidence: conf,
+                method: OffsetMethod::SeedBased,
+                evidence: vec![],
+            };
+            (off, Some(result))
+        }
+        None => {
+            tracing::warn!(
+                "Seed offset vote was inconclusive — trying standard offset detection"
+            );
+            let fallback = offset::calculate_offset(doc, None, config.toc_pages);
+            // If the standard detection is very low-confidence (< 30%), default to
+            // offset 0 rather than risking a wildly wrong value that pushes most
+            // seeds out of range.
+            let (off, result) = match fallback {
+                Some(ref r) if r.confidence >= 0.30 => (r.offset, fallback),
+                Some(ref r) => {
+                    tracing::warn!(
+                        "Standard offset detection low-confidence ({:.0}%) — using offset 0",
+                        r.confidence * 100.0
+                    );
+                    let zero = OffsetResult {
+                        offset: 0,
+                        confidence: 0.0,
+                        method: OffsetMethod::SeedBased,
+                        evidence: vec![],
+                    };
+                    (0, Some(zero))
+                }
+                None => {
+                    tracing::warn!("No offset detected — using offset 0");
+                    let zero = OffsetResult {
+                        offset: 0,
+                        confidence: 0.0,
+                        method: OffsetMethod::SeedBased,
+                        evidence: vec![],
+                    };
+                    (0, Some(zero))
+                }
+            };
+            (off, result)
+        }
+    };
+
+    // Phase 3: Resolve seeds → verified page locations.
+    #[cfg(feature = "ocr")]
+    let resolved = seed::verify_seeds_ocr(
+        &seeds,
+        offset,
+        std::path::Path::new(path),
+        config.fuzzy_threshold,
+        config.page_shift_tolerance,
+        total_pages,
+    )
+    .unwrap_or_else(|e| {
+        tracing::warn!("Seed OCR verification failed ({e:#}), falling back to text extraction");
+        seed::resolve_seeds(&seeds, offset, doc, config.fuzzy_threshold, config.page_shift_tolerance)
+    });
+
+    #[cfg(not(feature = "ocr"))]
+    let resolved = seed::resolve_seeds(
+        &seeds,
+        offset,
+        doc,
+        config.fuzzy_threshold,
+        config.page_shift_tolerance,
+    );
+
+    let confirmed = resolved
+        .iter()
+        .filter(|r| r.status == seed::SeedStatus::Confirmed)
+        .count();
+    let estimated = resolved
+        .iter()
+        .filter(|r| r.status == seed::SeedStatus::Estimated)
+        .count();
+    tracing::info!(
+        "Seed resolution: {confirmed} confirmed, {estimated} estimated, {} out-of-range",
+        resolved.len() - confirmed - estimated
+    );
+
+    // Phase 4: Convert resolved seeds → HeadingCandidates.
+    let headings = seed::seeds_to_headings(&resolved);
+
+    // Phases 5–6: finish (verify against page text + inject).
+    let mut result = finish_pipeline(
+        doc,
+        path,
+        config,
+        probe_result,
+        None,
+        headings,
+        seed_offset_result,
+    )?;
+
+    // Attach seed verification table to result.
+    result.seed_verification = Some(resolved);
+    Ok(result)
 }
 
 // ---------------------------------------------------------------------------
@@ -231,6 +390,9 @@ pub fn recover_outline(
 ///
 /// Extracted so that both the TextBased/Mixed path and the Scanned/OCR path
 /// can share the same logic without duplication.
+///
+/// `override_offset` — when `Some`, skips the normal offset calculation and
+/// uses the supplied value directly (used by the seeded path).
 fn finish_pipeline(
     doc: &mut Document,
     _path: &str,
@@ -238,6 +400,7 @@ fn finish_pipeline(
     probe_result: ProbeResult,
     layout_result: Option<LayoutResult>,
     headings: Vec<HeadingCandidate>,
+    override_offset: Option<OffsetResult>,
 ) -> Result<RecoveryResult> {
     if headings.is_empty() {
         return Ok(RecoveryResult {
@@ -248,11 +411,13 @@ fn finish_pipeline(
             chapter_map: BTreeMap::new(),
             verification: vec![],
             injected_count: None,
+            seed_verification: None,
         });
     }
 
-    // Phase 4: Offset calculation.
-    let offset_result = offset::calculate_offset(doc, layout_result.as_ref(), config.toc_pages);
+    // Phase 4: Offset calculation (skip if an override was supplied).
+    let offset_result = override_offset
+        .or_else(|| offset::calculate_offset(doc, layout_result.as_ref(), config.toc_pages));
 
     // Phase 5: Verify headings against page text.
     let verification = verify_headings(doc, &headings, config.fuzzy_threshold);
@@ -291,6 +456,7 @@ fn finish_pipeline(
         chapter_map,
         verification,
         injected_count,
+        seed_verification: None,
     })
 }
 

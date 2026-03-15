@@ -259,6 +259,24 @@ pub enum Commands {
         /// Output the full pipeline result as JSON.
         #[arg(long)]
         json: bool,
+
+        /// Path to a reference PDF whose /Outlines provide seed chapter titles.
+        /// The reference PDF must have a working outline (verify with `arcane outline`).
+        /// Mutually exclusive with --seed-file.
+        #[arg(long, value_name = "PDF", conflicts_with = "seed_file")]
+        seed_pdf: Option<PathBuf>,
+
+        /// Path to a JSON seed file with known chapter titles and page numbers.
+        /// Format: [{"title": "...", "page": N, "depth": D}, ...]
+        /// Pages are 1-based logical page numbers matching `arcane outline` display.
+        #[arg(long, value_name = "JSON")]
+        seed_file: Option<PathBuf>,
+
+        /// Page-search tolerance window (±N pages) when locating seed titles
+        /// in the target PDF.  Increase if chapters may be shifted by more than
+        /// the default.
+        #[arg(long, default_value_t = 5)]
+        seed_tolerance: u32,
     },
 
     /// Show the outline (bookmarks) and page labels of a PDF file.
@@ -338,6 +356,27 @@ pub enum Commands {
         /// Force re-download even if files already exist.
         #[arg(long)]
         force: bool,
+    },
+
+    /// Run OCR on a page range and output the recognised text.
+    ///
+    /// Requires `cargo build --features ocr` and `arcane init-ocr`.
+    /// Renders pages via pdfium, runs PaddleOCR, and prints the text.
+    Ocr {
+        /// Path to the PDF file.
+        file: PathBuf,
+
+        /// Page range to OCR (1-based, e.g. "1-5" or "14-20").
+        #[arg(long)]
+        pages: String,
+
+        /// Render DPI (higher = more accurate but slower).
+        #[arg(long, default_value_t = 150)]
+        dpi: u32,
+
+        /// Output as JSON (includes coordinates and confidence scores).
+        #[arg(long)]
+        json: bool,
     },
 
     /// Correlate detected chapter headings with TOC entries to find the
