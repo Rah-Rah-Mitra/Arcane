@@ -60,14 +60,29 @@ pub fn build_font_histogram(doc: &Document) -> Option<BTreeMap<u16, u64>> {
             Err(_) => continue,
         };
 
-        let mut current_key: u16 = 120; // default 12pt × 10
+        let mut current_nominal: f32 = 12.0; // raw Tf size
+        let mut tm_scale: f32 = 1.0;        // √(a²+b²) from Tm operator
+        let mut current_key: u16 = float_to_key(current_nominal * tm_scale);
 
         for op in &content.operations {
             match op.operator.as_str() {
+                "BT" => {
+                    tm_scale = 1.0;
+                    current_key = float_to_key(current_nominal * tm_scale);
+                }
+                "Tm" => {
+                    if op.operands.len() >= 6 {
+                        let a = obj_as_f32(&op.operands[0]).unwrap_or(1.0);
+                        let b = obj_as_f32(&op.operands[1]).unwrap_or(0.0);
+                        tm_scale = (a * a + b * b).sqrt().max(0.001);
+                        current_key = float_to_key(current_nominal * tm_scale);
+                    }
+                }
                 "Tf" => {
                     if let Some(size_obj) = op.operands.get(1) {
                         if let Some(size) = obj_as_f32(size_obj) {
-                            current_key = float_to_key(size);
+                            current_nominal = size;
+                            current_key = float_to_key(current_nominal * tm_scale);
                         }
                     }
                 }
@@ -193,14 +208,30 @@ pub fn extract_headings(doc: &Document, min_ratio: f32, max_depth: u32) -> Vec<H
             Err(_) => continue,
         };
 
-        let mut current_size: f32 = 12.0;
+        let mut current_nominal: f32 = 12.0; // raw Tf size
+        let mut tm_scale: f32 = 1.0;        // √(a²+b²) from Tm operator
+        // Effective size (recomputed whenever Tf or Tm changes).
+        let mut current_size: f32 = current_nominal * tm_scale;
 
         for op in &content.operations {
             match op.operator.as_str() {
+                "BT" => {
+                    tm_scale = 1.0;
+                    current_size = current_nominal * tm_scale;
+                }
+                "Tm" => {
+                    if op.operands.len() >= 6 {
+                        let a = obj_as_f32(&op.operands[0]).unwrap_or(1.0);
+                        let b = obj_as_f32(&op.operands[1]).unwrap_or(0.0);
+                        tm_scale = (a * a + b * b).sqrt().max(0.001);
+                        current_size = current_nominal * tm_scale;
+                    }
+                }
                 "Tf" => {
                     if let Some(size_obj) = op.operands.get(1) {
                         if let Some(size) = obj_as_f32(size_obj) {
-                            current_size = size;
+                            current_nominal = size;
+                            current_size = current_nominal * tm_scale;
                         }
                     }
                 }

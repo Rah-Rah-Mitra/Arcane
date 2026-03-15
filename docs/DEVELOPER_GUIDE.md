@@ -60,7 +60,7 @@ src/
 │   ├── heuristics.rs       # Font-size heuristics, heading extraction, outline injection
 │   ├── probe.rs            # PDF classification (text-based vs scanned vs mixed)
 │   ├── clustering.rs       # Jenks natural-breaks 1D font-size clustering
-│   ├── layout.rs           # Position-aware text extraction (text-matrix state machine)
+│   ├── layout.rs           # Multi-heuristic classifier: TypographicProfile, TextFeature, classify_features
 │   ├── offset.rs           # Logical-to-physical page offset calculation
 │   ├── pipeline.rs         # Outline recovery pipeline orchestrator
 │   ├── outlines.rs         # /Outlines (bookmarks) extraction with depth support
@@ -130,9 +130,10 @@ The CLI layer uses `clap` derive macros for declarative command definitions in `
 - `cmd_list_chunks()`: Lists chunk files for a source
 - `cmd_outline()`: Displays PDF outline tree and page labels
 - `cmd_probe()`: Classifies a PDF as text-based, scanned, or mixed
-- `cmd_detect_layout()`: Detects structural anchors (headings, TOC entries, page numbers)
+- `cmd_detect_layout()`: Statistical typographic profiling + multi-heuristic structural classification
 - `cmd_find_offset()`: Calculates logical-to-physical page offset
-- `cmd_recover_outline()`: Full outline recovery pipeline (probe → cluster → extract → offset → verify → inject)
+- `cmd_recover_outline()`: Full outline recovery pipeline (probe → profile → classify → offset → verify → inject)
+- `cmd_sync_pages()`: RANSAC-style heading↔TOC consensus offset with inlier table
 - `cmd_reindex()`: Rebuilds the search index
 - `cmd_tag()` / `cmd_untag()`: Tag management
 - `cmd_merge()` / `cmd_split()` / `cmd_rotate()`: Structural PDF operations
@@ -239,18 +240,100 @@ offset = physical_index - logical_page_number
 - **`write_chunk(doc, start, end, path)`** (`engine.rs`): BFS-based minimal page extraction
 - **`sanitise_filename(name)`** (`engine.rs`): Clean chapter titles for filenames
 
-#### Outline Recovery Pipeline
+#### Multi-Heuristic Structural Classifier
 
-When a PDF has no `/Outlines` bookmarks, the `recover-outline` command runs a modular pipeline to reconstruct them:
+The layout analysis pipeline is the core of both `detect-layout` and `recover-outline`. It replaces the old single-pass font-ratio heuristic with a four-phase statistical approach:
+
+```
+extract_positioned_text  →  Vec<PositionedText>     (Tm-scale-corrected sizes)
+        │
+ [Phase A] build_typographic_profile  →  TypographicProfile
+        │                                (μ, σ, mode/body_centroid, gap_p90)
+ [Phase B] build_text_features  →  Vec<TextFeature>
+        │                          (flags, Z-score, case, gap, font descriptor)
+ [Phase C] classify_features    →  Vec<LayoutAnchor>
+        │                          (Bayesian confidence, TOC boost, offset boost)
+ [Phase D] cmd_sync_pages (RANSAC)  →  PageSyncResult
+                                       (consensus offset + inlier table)
+```
+
+**Phase A — Typographic Profiler (`build_typographic_profile`)**
+
+Samples the first 50 pages to compute:
+- `size_mean` / `size_stddev` — mean and σ of all effective font sizes
+- `body_centroid` — mode of a 1pt-bucket histogram (the dominant body text size)
+- `gap_p90` — 90th-percentile vertical gap between text blocks (used for isolation detection)
+
+**Phase B — Feature Extraction (`build_text_features`)**
+
+For each `PositionedText`, builds a `TextFeature` with:
+
+```rust
+pub type TextFlags = u16;
+pub const FLAG_BOLD:        TextFlags = 0x0001; // FontWeight > 600 or bold BaseFont name
+pub const FLAG_ITALIC:      TextFlags = 0x0002; // ItalicAngle < -5°
+pub const FLAG_ALL_CAPS:    TextFlags = 0x0004;
+pub const FLAG_TITLE_CASE:  TextFlags = 0x0008;
+pub const FLAG_ISOLATED:    TextFlags = 0x0010; // y_gap_above ≥ gap_p90
+pub const FLAG_LARGE_FONT:  TextFlags = 0x0020; // Z-score > 3.0
+pub const FLAG_MED_FONT:    TextFlags = 0x0040; // Z-score in [1.5, 3.0)
+pub const FLAG_SMALL_FONT:  TextFlags = 0x0080; // Z-score < -1.5
+```
+
+Bold/italic flags are resolved from the PDF's `/FontDescriptor` dictionary (`FontWeight`, `ItalicAngle`) and from the `/BaseFont` name (e.g. names containing "Bold", "Heavy", "Black").
+
+**Phase C — Bayesian Classification (`classify_features`)**
+
+Rules applied in priority order (first match wins):
+
+| Flags | Classification | Base confidence |
+|-------|---------------|----------------|
+| LARGE_FONT + BOLD + ISOLATED | ChapterHeading | `0.5 + z×0.05` (max 0.95) |
+| LARGE_FONT + ISOLATED | ChapterHeading | `0.4 + z×0.04` |
+| (BOLD \| ALL_CAPS) + ISOLATED | SectionHeading | 0.75 |
+| BOLD + NOT ISOLATED | skip (inline emphasis) | — |
+| SMALL_FONT + ISOLATED, near margin | PageNumber | 0.70 |
+| `is_toc_entry(text)` | TocEntry | 0.70 |
+| MED_FONT + numbered pattern | NumberedHeading | 0.80 |
+
+Bayesian boosts after initial classification:
+- **+0.20** if anchor text fuzzy-matches a TOC entry title (normalized Levenshtein ≥ 0.80)
+- **+0.10** if `anchor.page_index == toc_printed_page + predicted_offset`
+
+Anchors with final confidence < 0.40 are dropped.
+
+**Phase D — RANSAC Offset (`cmd_sync_pages`)**
+
+For each heading × TOC-entry pair with similarity ≥ threshold:
+1. Computes `delta = physical_page − printed_page`
+2. Accumulates into a similarity-weighted histogram
+3. Consensus = delta with maximum total weight
+4. Inliers = pairs where `|delta − consensus| ≤ 1`
+5. Outputs `PageSyncResult { consensus_offset, confidence, inlier_count, matches }`
+
+#### Tm Scale Tracking
+
+Many PDFs (especially LaTeX-generated books) store a nominal `1pt` font size in `/Font` descriptors but scale text via the text matrix (`Tm a b c d e f`). Without correction, all font sizes appear as `1pt` and no headings are detected.
+
+The fix tracks `tm_scale` per text object:
+```
+On "BT":      tm_scale = 1.0
+On "Tm a b …": tm_scale = √(a² + b²)
+effective_size = current_nominal_size × tm_scale
+```
+
+This applies in both `extract_positioned_text` (layout.rs) and `build_font_histogram`/`extract_headings` (heuristics.rs).
+
+#### Outline Recovery Pipeline (full `recover-outline` flow)
 
 ```
 pipeline.rs (orchestrator)
     │
     ├── probe.rs         — Classify pages as Text/Image/Mixed/Empty
     ├── clustering.rs    — Jenks natural-breaks on font-size histogram
-    ├── layout.rs        — Text-matrix state machine for (x, y) extraction
+    ├── layout.rs        — Phase A → B → C (profile → features → classify)
     │       │
-    │       └── Detects: ChapterHeading, SectionHeading, TocEntry, PageNumber
+    │       └── TypographicProfile + Vec<TextFeature> + Vec<LayoutAnchor>
     ├── offset.rs        — Logical-to-physical page delta
     │       │
     │       ├── Strategy 1: /PageLabels number tree
@@ -265,13 +348,33 @@ pipeline.rs (orchestrator)
 **Key types:**
 - `ProbeResult` — document classification with per-page breakdown
 - `FontCluster` / `FontRole` — clustered font sizes with semantic roles (Body, Heading1, Heading2, Footnote)
-- `PositionedText` — text run with (x, y, font_size) from the text-matrix state machine
-- `LayoutAnchor` / `AnchorKind` — structural element detected by position + font analysis
+- `PositionedText` — text run with Tm-scale-corrected `(x, y, font_size)` from the text-matrix state machine
+- `TypographicProfile` — statistical summary (μ, σ, body_centroid, gap_p90) of the document's typography
+- `TextFeature` — per-text-run feature vector (Z-score, TextFlags, CasePattern, font_weight, italic_angle, y_gap_above)
+- `TextFlags` (u16) — bit-packed flags: BOLD, ITALIC, ALL_CAPS, TITLE_CASE, ISOLATED, LARGE_FONT, MED_FONT, SMALL_FONT
+- `CasePattern` — AllCaps / TitleCase / SentenceCase / Mixed / Numeric
+- `LayoutAnchor` / `AnchorKind` — structural element with Bayesian confidence score
 - `OffsetResult` / `OffsetMethod` — page offset with confidence score and evidence chain
+- `PageSyncResult` / `SyncMatch` — RANSAC consensus offset output
 - `RecoveryConfig` — pipeline configuration (min_font_ratio, depth, toc_pages, fuzzy_threshold)
 - `RecoveryResult` — full pipeline output (probe, layout, offset, headings, verification, injection count)
 
-The pipeline is designed so each module can be used independently via CLI sub-commands (`probe`, `detect-layout`, `find-offset`) or composed together for the full `recover-outline` flow.
+The pipeline is designed so each module can be used independently via CLI sub-commands (`probe`, `detect-layout`, `find-offset`, `sync-pages`) or composed together for the full `recover-outline` flow.
+
+#### Pixel-Density Stubs (OCR Milestone)
+
+`layout.rs` contains two `#[allow(dead_code)]` stub functions reserved for the future OCR milestone:
+
+```rust
+/// (Stub) Estimate font weight from black-pixel ratio in bounding box.
+/// Bold: ratio ~0.15–0.25; Regular: ~0.08–0.12.
+pub fn estimate_weight_from_pixel_density(_image: &[u8], _bbox: (f32, f32, f32, f32)) -> u16 { 400 }
+
+/// (Stub) Detect italic via Horizontal Projection Profile.
+pub fn detect_italic_hpp(_image: &[u8], _bbox: (f32, f32, f32, f32)) -> bool { false }
+```
+
+These will be implemented under the `ocr` feature flag (see [OCR Integration Plan](#ocr-integration-plan)) to provide bold/italic detection for scanned PDFs where no `/FontDescriptor` is available.
 
 #### Performance
 
@@ -412,16 +515,22 @@ cargo test test_name
 
 ### Test Structure
 
-Tests are organized as inline `#[cfg(test)]` modules at the end of each source file. Current test suite: **79 tests**.
+Tests are organized as inline `#[cfg(test)]` modules at the end of each source file.
 
 Key test areas:
 - `models/project.rs`: Project operations
 - `models/source.rs`: Source metadata serialization, build_source dispatch
 - `pdf/engine.rs`: Boundary calculation, filename sanitization, idempotency
-- `pdf/heuristics.rs`: Font-size histogram, heading extraction, chapter map deduplication
+- `pdf/heuristics.rs`: Font-size histogram (with Tm tracking), heading extraction, chapter map deduplication
 - `pdf/probe.rs`: Page classification (text/image/empty), document-level probe, per-page counts
 - `pdf/clustering.rs`: Jenks clustering, role assignment (body/heading/footnote), edge cases
-- `pdf/layout.rs`: Text-matrix tracking, TOC entry patterns, page-number detection, anchor detection
+- `pdf/layout.rs`:
+  - `text_matrix_scale_tracking` — nominal 1pt + Tm scale 14× → effective 14.0
+  - `toc_entry_patterns` — positive patterns + false-positive guards (`"a 3 x 3"`, `"1 0 0 1 0"`)
+  - `typographic_profile_body_centroid` — profiler picks body size from distribution
+  - `feature_z_score_flags` — size=2σ above mean → `FLAG_MED_FONT`; size=4σ → `FLAG_LARGE_FONT`
+  - `detect_case_pattern_variants` — AllCaps / TitleCase / SentenceCase / Numeric
+  - page-number detection, anchor detection
 - `pdf/offset.rs`: TOC line parsing, fuzzy similarity, page-number consensus, range filtering
 - `pdf/pipeline.rs`: Heading merging, chapter map building, line similarity, HeadingInfo conversion
 - `pdf/page_labels.rs`: Roman numeral conversion, label resolution

@@ -1220,3 +1220,201 @@ fn parse_page_ranges(range_strs: &[String]) -> Result<Vec<(u32, u32)>> {
     }
     Ok(ranges)
 }
+
+// ---------------------------------------------------------------------------
+// sync-pages command
+// ---------------------------------------------------------------------------
+
+/// One matched heading ↔ TOC-entry pair.
+#[derive(Debug, serde::Serialize)]
+pub struct SyncMatch {
+    pub toc_title: String,
+    pub printed_page: u32,
+    pub physical_page: u32,
+    pub similarity: f64,
+    pub delta: i32,
+    pub is_inlier: bool,
+}
+
+/// Result of `sync-pages` consensus offset estimation.
+#[derive(Debug, serde::Serialize)]
+pub struct PageSyncResult {
+    pub consensus_offset: i32,
+    /// Fraction of candidates consistent with the consensus offset.
+    pub confidence: f32,
+    pub total_candidates: usize,
+    pub inlier_count: usize,
+    pub matches: Vec<SyncMatch>,
+}
+
+pub fn cmd_sync_pages(
+    file: std::path::PathBuf,
+    toc_pages: Option<String>,
+    threshold: f64,
+    json: bool,
+) -> Result<()> {
+    use std::collections::HashMap;
+
+    use crate::pdf::{layout, offset};
+
+    let doc = lopdf::Document::load(&file)
+        .with_context(|| format!("failed to open PDF at {}", file.display()))?;
+
+    // Run full layout analysis (feature-vector pipeline).
+    let layout_result = layout::analyze_layout(&doc, &file.display().to_string());
+
+    // Determine TOC pages.
+    let toc_page_range: Option<(u32, u32)> = if let Some(ref s) = toc_pages {
+        parse_page_range(s)
+    } else {
+        None
+    };
+
+    // Extract positioned text for TOC parsing.
+    let positioned = layout::extract_all_positioned(&doc);
+
+    // Detect or use supplied TOC pages.
+    let effective_toc_range: Option<(u32, u32)> = if let Some(range) = toc_page_range {
+        Some(range)
+    } else {
+        let auto = layout::detect_toc_pages(&positioned);
+        if auto.is_empty() {
+            None
+        } else {
+            let &min_p = auto.iter().min().unwrap();
+            let &max_p = auto.iter().max().unwrap();
+            Some((min_p, max_p))
+        }
+    };
+
+    // Parse TOC entries: (title, printed_page).
+    let toc_entries: Vec<(String, u32)> = if let Some(range) = effective_toc_range {
+        offset::parse_toc_entries(&positioned, range)
+    } else {
+        vec![]
+    };
+
+    if toc_entries.is_empty() {
+        if json {
+            let result = PageSyncResult {
+                consensus_offset: 0,
+                confidence: 0.0,
+                total_candidates: 0,
+                inlier_count: 0,
+                matches: vec![],
+            };
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        } else {
+            println!("No TOC entries found. Try --toc-pages <range>.");
+        }
+        return Ok(());
+    }
+
+    // Collect chapter/section heading anchors.
+    let heading_anchors: Vec<&layout::LayoutAnchor> = layout_result
+        .anchors
+        .iter()
+        .filter(|a| {
+            matches!(
+                a.kind,
+                layout::AnchorKind::ChapterHeading
+                    | layout::AnchorKind::SectionHeading
+                    | layout::AnchorKind::NumberedHeading
+            )
+        })
+        .collect();
+
+    // RANSAC offset estimation.
+    // For every heading × TOC-entry pair above threshold, compute delta.
+    let mut candidates: Vec<SyncMatch> = Vec::new();
+    let mut delta_votes: HashMap<i32, f64> = HashMap::new(); // delta → total_similarity
+
+    for (toc_title, printed_page) in &toc_entries {
+        for anchor in &heading_anchors {
+            let sim = strsim::normalized_levenshtein(anchor.text.trim(), toc_title.trim());
+            if sim >= threshold {
+                let delta = anchor.page_index as i32 - *printed_page as i32;
+                *delta_votes.entry(delta).or_insert(0.0) += sim;
+                candidates.push(SyncMatch {
+                    toc_title: toc_title.clone(),
+                    printed_page: *printed_page,
+                    physical_page: anchor.page_index,
+                    similarity: sim,
+                    delta,
+                    is_inlier: false, // filled in below
+                });
+            }
+        }
+    }
+
+    if candidates.is_empty() {
+        if json {
+            let result = PageSyncResult {
+                consensus_offset: 0,
+                confidence: 0.0,
+                total_candidates: 0,
+                inlier_count: 0,
+                matches: vec![],
+            };
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        } else {
+            println!("No heading↔TOC matches above threshold {threshold:.2}. Try a lower --threshold.");
+        }
+        return Ok(());
+    }
+
+    // Consensus = delta with the highest total similarity score.
+    let consensus_offset = delta_votes
+        .iter()
+        .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(&delta, _)| delta)
+        .unwrap_or(0);
+
+    // Mark inliers (|delta - consensus| ≤ 1).
+    for m in &mut candidates {
+        m.is_inlier = (m.delta - consensus_offset).abs() <= 1;
+    }
+    let inlier_count = candidates.iter().filter(|m| m.is_inlier).count();
+    let confidence = inlier_count as f32 / candidates.len() as f32;
+
+    let result = PageSyncResult {
+        consensus_offset,
+        confidence,
+        total_candidates: candidates.len(),
+        inlier_count,
+        matches: candidates,
+    };
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+        return Ok(());
+    }
+
+    // Human-readable output.
+    println!("File:             {}", file.display());
+    println!("Consensus offset: {}", result.consensus_offset);
+    println!(
+        "Confidence:       {:.0}%  ({} / {} inliers)",
+        result.confidence * 100.0,
+        result.inlier_count,
+        result.total_candidates
+    );
+    println!();
+    println!(
+        "{:<40}  {:>5}  {:>8}  {:>6}  {}",
+        "TOC Title", "Print", "Physical", "Sim", "Inlier"
+    );
+    println!("{}", "-".repeat(78));
+    for m in &result.matches {
+        println!(
+            "{:<40}  {:>5}  {:>8}  {:>5.2}  {}",
+            &m.toc_title[..m.toc_title.len().min(40)],
+            m.printed_page,
+            m.physical_page + 1,
+            m.similarity,
+            if m.is_inlier { "✓" } else { "✗" }
+        );
+    }
+
+    Ok(())
+}

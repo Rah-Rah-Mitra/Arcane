@@ -129,5 +129,11 @@ fn main() -> anyhow::Result<()> {
             password,
             output,
         } => commands::cmd_unlock(input, &password, output),
+        Commands::SyncPages {
+            file,
+            toc_pages,
+            threshold,
+            json,
+        } => commands::cmd_sync_pages(file, toc_pages, threshold, json),
     }
 }

@@ -9,6 +9,7 @@ Welcome to Arcane! This guide will help you get started with organizing your res
 - [Getting Started](#getting-started)
 - [Command Reference](#command-reference)
 - [Common Workflows](#common-workflows)
+- [PDF Analysis Pipeline](#pdf-analysis-pipeline)
 - [Understanding the Filesystem](#understanding-the-filesystem)
 - [Removing Sources and Projects](#removing-sources-and-projects)
 - [Troubleshooting](#troubleshooting)
@@ -353,12 +354,25 @@ Page labels:  yes
 
 This is the first step in understanding whether a PDF needs outline recovery, OCR, or is already well-structured.
 
-### `arcane detect-layout <file> [--json]`
+### `arcane detect-layout <file> [--json] [--pages RANGE]`
 
-Extracts positioned text from every page using the PDF text-matrix state machine, clusters font sizes, and identifies structural anchors: chapter headings, section headings, TOC entries, and page numbers.
+Extracts positioned text from every page using the PDF text-matrix state machine, builds a statistical typographic profile over the first 50 pages, and classifies structural anchors — chapter headings, section headings, numbered headings, TOC entries, and page numbers — using Z-score thresholds and Bayesian confidence scoring.
+
+**How it works:**
+
+1. **Text extraction** — reads every PDF text operator (`Tj`, `TJ`, `'`, `"`) and corrects effective font sizes using the text matrix (`Tm`). This fixes a common problem where PDFs store a nominal `1pt` font size but scale it to 14pt via the text matrix — without this correction, `body_font_size` would report as `1.0`.
+
+2. **Typographic profiling** — computes mean (μ), standard deviation (σ), and mode (body centroid) of all effective font sizes, plus the 90th-percentile vertical gap between text blocks.
+
+3. **Feature extraction** — assigns each text run a `TextFeature` with:
+   - Z-score: `(size − μ) / σ`
+   - Flags: `BOLD`, `ITALIC`, `ALL_CAPS`, `TITLE_CASE`, `ISOLATED` (gap ≥ p90), `LARGE_FONT` (z > 3.0), `MED_FONT` (z ∈ [1.5, 3.0))
+   - Case pattern: AllCaps / TitleCase / SentenceCase / Mixed / Numeric
+
+4. **Classification** — applies a priority rule table (large+bold+isolated → ChapterHeading; bold+isolated+body-size → SectionHeading; etc.) then boosts confidence +0.20 for TOC fuzzy matches ≥ 0.80. Anchors below 0.40 confidence are dropped.
 
 **Options:**
-- `--json`: Output the full result as JSON (anchors, font clusters)
+- `--json`: Output the full result as JSON (anchors, font clusters, feature vectors)
 - `--pages RANGE`: Only analyse specific pages (0-based range, e.g. "0-5")
 
 **Example:**
@@ -379,10 +393,12 @@ Font clusters:
    8.0pt      5000 chars  Footnote
 
 Structural anchors (42):
-  page    3  y= 650.0  ChapterHeading     24  Introduction
-  page    3  y= 580.0  SectionHeading     14  1.1 Background
+  page    3  y= 650.0  ChapterHeading     24.0  Introduction
+  page    3  y= 580.0  SectionHeading     14.0  1.1 Background
   ...
 ```
+
+> **Note for LaTeX/scanned books:** Some PDFs (especially those built with LaTeX or tools that strip metadata) store nominal `1pt` font sizes and scale via the text matrix. Before the Tm-scale fix, `detect-layout` would report `body_font_size: 1.0` and fail to detect any headings. The fix resolves this automatically.
 
 ### `arcane find-offset <file> [--toc-pages <range>] [--json]`
 
@@ -414,13 +430,53 @@ Evidence:
   physical page   18 → printed page    1  (PageLabels: Arabic numbering starts at physical page 18)
 ```
 
+### `arcane sync-pages <file> [--toc-pages RANGE] [--threshold T] [--json]`
+
+Correlates detected chapter headings with TOC entries using a RANSAC-style consensus algorithm to determine the physical-to-logical page offset. More robust than `find-offset` when the PDF has no `/PageLabels` and the TOC is noisy.
+
+**How it works:**
+
+1. Runs the full layout analysis to detect chapter and section headings.
+2. Parses TOC entries (title + printed page number) from the specified (or auto-detected) TOC pages.
+3. For every heading × TOC-entry pair whose title similarity ≥ `--threshold`, computes a candidate delta: `physical_page − printed_page`.
+4. Builds a histogram of all candidate deltas weighted by similarity score.
+5. The **consensus offset** is the delta with the highest total weight. Inliers are all pairs where `|delta − consensus| ≤ 1`.
+6. Re-runs classification with Bayesian confidence boosts for the consensus offset.
+
+**Options:**
+- `--toc-pages START-END`: TOC page range (1-based, e.g. "14-20"). Auto-detected if omitted.
+- `--threshold T`: Minimum normalised Levenshtein similarity for a heading↔TOC match (default: 0.6)
+- `--json`: Output as JSON (consensus offset, confidence, inlier match table)
+
+**Example:**
+```bash
+arcane sync-pages ~/Books/textbook.pdf --toc-pages 14-20
+```
+
+**Output:**
+```
+File:             /home/user/Books/textbook.pdf
+Consensus offset: +18
+Confidence:       92% (11/12 inliers)
+
+Matches:
+  TOC: "Introduction"  printed p.1   →  physical p.19  similarity=0.97  ✓
+  TOC: "Foundations"   printed p.21  →  physical p.39  similarity=0.92  ✓
+  TOC: "Sorting"       printed p.43  →  physical p.61  similarity=0.89  ✓
+  ...
+```
+
+**When to use `sync-pages` vs `find-offset`:**
+- `find-offset` is faster and works well when `/PageLabels` exists or the TOC is small.
+- `sync-pages` is the right choice for books with no `/PageLabels`, large/complex TOCs, or when you need a match confidence table for verification.
+
 ### `arcane recover-outline <file> [options]`
 
 Recovers and injects outline bookmarks into PDFs that have no `/Outlines`, using a tiered pipeline:
 
 1. **Probe** — classify the document (text-based or scanned)
-2. **Cluster** — group font sizes using Jenks natural-breaks to identify heading levels
-3. **Extract** — detect headings via position-aware text analysis with (x, y) coordinates
+2. **Profile** — build a statistical typographic profile (μ, σ, body centroid, gap p90) over the first 50 pages
+3. **Classify** — extract `TextFeature` vectors (Z-score, bold/italic flags, case pattern, isolation) and classify structural anchors with Bayesian confidence scoring
 4. **Offset** — calculate the front-matter page delta
 5. **Verify** — fuzzy-match each heading against the text on its target page
 6. **Inject** — write a hierarchical `/Outlines` tree (Chapter > Section nesting)
@@ -572,6 +628,66 @@ arcane search "red-black trees" --source "CLRS 4th Edition"
 # Later, remove a source you no longer need
 arcane remove "Algorithms Study" "Sedgewick & Wayne"
 ```
+
+## PDF Analysis Pipeline
+
+Arcane includes a full pipeline for analysing and recovering the structure of PDFs that lack bookmarks. The commands build on each other:
+
+```
+arcane probe book.pdf                  # Step 1: Is it text-based or scanned?
+arcane detect-layout book.pdf          # Step 2: What headings / font distribution does it have?
+arcane sync-pages book.pdf             # Step 3: Find the physical↔printed page offset (RANSAC)
+arcane find-offset book.pdf            # Step 3 alt: Simpler offset detection (PageLabels / TOC)
+arcane recover-outline book.pdf        # Step 4: Inject recovered bookmarks into the PDF
+arcane outline book-recovered.pdf      # Step 5: Verify the injected outline looks right
+```
+
+### Workflow: Fixing a Book with No Bookmarks
+
+```bash
+# Confirm the PDF is text-based (not scanned)
+arcane probe ~/Books/vision.pdf
+
+# Preview the structural analysis — check body_font_size is sensible (e.g. ~10pt)
+arcane detect-layout ~/Books/vision.pdf
+
+# If the book has a TOC, use sync-pages to find the page offset
+arcane sync-pages ~/Books/vision.pdf --toc-pages 14-20
+
+# Preview detected headings with the recovered structure
+arcane recover-outline ~/Books/vision.pdf --dry-run --toc-pages 14-20
+
+# Write a fixed copy with injected bookmarks
+arcane recover-outline ~/Books/vision.pdf --output ~/Books/vision-fixed.pdf --toc-pages 14-20
+
+# Verify bookmarks were injected correctly
+arcane outline ~/Books/vision-fixed.pdf --depth 3
+
+# Add the fixed copy to your project and chunk it
+arcane add "Computer Vision" ~/Books/vision-fixed.pdf --textbook --title "3-D Vision"
+arcane chunk "Computer Vision" --source "3-D Vision" --depth 1
+```
+
+### Understanding `body_font_size`
+
+The `body_font_size` field in `detect-layout` output is the mode of the effective font-size distribution — the size that the majority of body text uses. It is derived from the full typographic profile (μ, σ, histogram mode over 50 pages), so it is robust against outliers like large chapter titles or tiny footnotes.
+
+> **Before the Tm-scale fix:** PDFs built with tools that store a nominal `1pt` font size scaled by the text matrix would report `body_font_size: 1.0` and detect zero headings. The fix tracks the `Tm` operator to compute `effective_size = nominal × √(a²+b²)`, resolving the issue.
+
+### Confidence Scores
+
+Every structural anchor detected by `detect-layout` and `recover-outline` has a confidence score between 0.0 and 1.0:
+
+| Score range | Interpretation |
+|-------------|----------------|
+| 0.85 – 1.0  | Very high — large font + bold + isolated + TOC match |
+| 0.65 – 0.85 | High — bold or case-pattern match with isolation |
+| 0.40 – 0.65 | Medium — single signal (font size alone) |
+| < 0.40      | Dropped — insufficient evidence |
+
+The Bayesian boosts applied:
+- **+0.20** when the anchor text fuzzy-matches a TOC entry title (≥ 0.80 Levenshtein similarity)
+- **+0.10** when the anchor's physical page equals the expected page from the consensus offset
 
 ## Understanding the Filesystem
 

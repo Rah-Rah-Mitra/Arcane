@@ -7,7 +7,8 @@ A local-first research archival application for organizing academic materials. A
 - **Project-Based Organization**: Group related sources under named projects with optional tags
 - **Smart PDF Chunking**: Automatically split textbooks into individual chapter files
 - **Multi-Level Chapter Detection**: Extracts chapter boundaries from PDF bookmarks/outlines with configurable depth (sub-chapters, sections)
-- **Outline Recovery Pipeline**: Reconstruct missing bookmarks using font-size clustering, position-aware analysis, and fuzzy verification — then inject them back as functional PDF outlines
+- **Outline Recovery Pipeline**: Reconstruct missing bookmarks using a multi-heuristic structural classifier — statistical typographic profiling (μ/σ/Z-scores), bold/italic/case feature extraction, Bayesian confidence scoring, and fuzzy verification — then inject them back as functional PDF outlines
+- **Page Sync / RANSAC Offset**: Correlate detected headings with TOC entries using RANSAC-style consensus voting to find the physical-to-logical page offset
 - **PDF Classification**: Instantly determine whether a PDF is text-based, scanned, or mixed
 - **Page Offset Detection**: Automatically calculate the front-matter delta between printed and physical page numbers
 - **Physical/Logical Page Mapping**: Correctly handles front-matter with Roman numerals
@@ -117,9 +118,10 @@ Chapter PDFs are written to `~/Arcane/Library/<Project>/Chunks/<Source>/`.
 | `arcane untag <project> <tag>` | Remove a tag |
 | `arcane outline <file> [--depth N]` | Show PDF outline tree and page labels |
 | `arcane probe <file> [--json]` | Classify PDF as text-based, scanned, or mixed |
-| `arcane detect-layout <file> [--json]` | Detect structural anchors (headings, TOC entries, page numbers) |
+| `arcane detect-layout <file> [--json] [--pages R]` | Detect structural anchors with statistical typographic profiling |
 | `arcane find-offset <file> [--toc-pages R] [--json]` | Calculate logical-to-physical page offset |
 | `arcane recover-outline <file> [options]` | Recover and inject outline bookmarks (full pipeline) |
+| `arcane sync-pages <file> [--toc-pages R] [--threshold T] [--json]` | RANSAC consensus offset from heading↔TOC matching |
 | `arcane remove <project> [source]` | Remove a source or entire project |
 | `arcane merge <output> <inputs…>` | Merge multiple PDFs into one |
 | `arcane split <input> <ranges…> [--output-dir D]` | Split a PDF by page ranges |

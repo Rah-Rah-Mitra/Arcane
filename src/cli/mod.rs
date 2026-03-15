@@ -320,4 +320,27 @@ pub enum Commands {
         #[arg(long)]
         output: Option<PathBuf>,
     },
+
+    /// Correlate detected chapter headings with TOC entries to find the
+    /// physical-to-logical page offset.
+    ///
+    /// Uses RANSAC-style consensus: for every heading × TOC-entry pair
+    /// whose title similarity exceeds `--threshold`, computes the candidate
+    /// offset delta.  The most-voted delta is the consensus offset.
+    SyncPages {
+        /// Path to the PDF file.
+        file: PathBuf,
+
+        /// TOC page range (1-based, e.g. "14-20"). Auto-detected if omitted.
+        #[arg(long)]
+        toc_pages: Option<String>,
+
+        /// Minimum normalised Levenshtein similarity for a heading↔TOC match.
+        #[arg(long, default_value_t = 0.6)]
+        threshold: f64,
+
+        /// Output as JSON.
+        #[arg(long)]
+        json: bool,
+    },
 }
