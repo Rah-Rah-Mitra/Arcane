@@ -333,7 +333,7 @@ On "Tm a b …": tm_scale = √(a² + b²)
 effective_size = current_nominal_size × tm_scale
 ```
 
-This applies in both `extract_positioned_text` (layout.rs) and `build_font_histogram`/`extract_headings` (heuristics.rs).
+This applies in both `extract_positioned_text` (layout.rs) and the heading detection heuristics in `heuristics.rs` (for example, via `build_font_histogram`).
 
 #### OCR Overlay Tier (`src/pdf/ocr.rs`)
 
@@ -343,14 +343,14 @@ Behind the `ocr` feature flag, Arcane includes an OCR overlay tier for PDFs with
 - **oar-ocr**: PaddleOCR v5 mobile models for text detection + recognition
 - **ort (load-dynamic)**: Loads ONNX Runtime at runtime via `ORT_DYLIB_PATH`
 
-```
-extract_headings_ocr(path, page_indices, dpi)          → Vec<PositionedText>
-    │                                                     (worker-routed API)
-    ├── If worker is running: IPC request to worker
-    ├── If worker absent: start temporary worker, request, stop
-    └── Fallback: extract_headings_ocr_direct() in-process
+The OCR overlay produces `Vec<PositionedText>` for the requested pages and feeds that into the same layout/heuristics pipeline used for native text extraction. A typical call path looks like:
 
-extract_headings_ocr_direct(path, page_indices, dpi)   → Vec<PositionedText>
+- A worker-routed API that, when a worker is running, sends an IPC request to perform OCR on the given pages.
+- If no worker is running, the client starts a temporary worker, issues the request, and then shuts the worker down.
+- As a fallback, an in-process API performs OCR directly in the current process.
+
+All of these paths ultimately yield positioned text that can be consumed by `extract_positioned_text`/layout consumers and the heuristics tier (e.g., `build_font_histogram`) for heading and TOC detection.
+
     ├── ensure_ort_loaded()      — OnceLock-guarded DLL init (once per process)
     ├── get_ocr_engine()         — OnceLock-cached OAROCR (built once, reused)
     ├── bind_pdfium()            — ~/Arcane/models/ → CWD → system search
