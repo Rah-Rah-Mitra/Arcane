@@ -221,40 +221,29 @@ pub fn extract_headings_ocr(
         .context("pdfium: failed to open PDF")?;
 
     let scale = dpi as f32 / 72.0;
+    let render_config = PdfRenderConfig::new().scale_page_by_factor(scale);
 
-    // Phase 1: render all pages to images.
-    // Use DynamicImage::to_rgb8() which returns ImageBuffer<Rgb<u8>, Vec<u8>> —
-    // the exact type oar-ocr's predict() expects.
-    let mut images = Vec::with_capacity(page_indices.len());
-    let mut meta: Vec<(u32, f32, f32)> = Vec::with_capacity(page_indices.len());
-
-    for &page_idx in page_indices {
-        let page = doc
-            .pages()
-            .get(page_idx as u16)
-            .with_context(|| format!("pdfium: page {page_idx} out of range"))?;
-
-        let page_h_pts = page.height().value;
-        let render_config = PdfRenderConfig::new().scale_page_by_factor(scale);
-        let dynamic_img = page
-            .render_with_config(&render_config)
-            .context("pdfium: page render failed")?
-            .as_image();
-
-        let img_h_px = dynamic_img.height() as f32;
-        images.push(dynamic_img.to_rgb8());
-        meta.push((page_idx, page_h_pts, img_h_px));
-    }
-
-    // Phase 2: batch OCR — process in chunks of BATCH_SIZE.
     let mut results: Vec<PositionedText> = Vec::new();
-    let mut img_idx = 0;
+    for batch_pages in page_indices.chunks(BATCH_SIZE) {
+        let mut batch = Vec::with_capacity(batch_pages.len());
+        let mut batch_meta: Vec<(u32, f32, f32)> = Vec::with_capacity(batch_pages.len());
 
-    while !images.is_empty() {
-        let batch_size = images.len().min(BATCH_SIZE);
-        let batch: Vec<_> = images.drain(..batch_size).collect();
-        let batch_meta = &meta[img_idx..img_idx + batch_size];
-        img_idx += batch_size;
+        for &page_idx in batch_pages {
+            let page = doc
+                .pages()
+                .get(page_idx as u16)
+                .with_context(|| format!("pdfium: page {page_idx} out of range"))?;
+
+            let page_h_pts = page.height().value;
+            let dynamic_img = page
+                .render_with_config(&render_config)
+                .context("pdfium: page render failed")?
+                .as_image();
+
+            let img_h_px = dynamic_img.height() as f32;
+            batch.push(dynamic_img.to_rgb8());
+            batch_meta.push((page_idx, page_h_pts, img_h_px));
+        }
 
         let outputs = ocr.predict(batch).context("OCR batch predict failed")?;
 
@@ -323,37 +312,28 @@ pub fn extract_text_ocr(
         .context("pdfium: failed to open PDF")?;
 
     let scale = dpi as f32 / 72.0;
+    let render_config = PdfRenderConfig::new().scale_page_by_factor(scale);
 
-    // Render pages to images.
-    let mut images = Vec::with_capacity(page_indices.len());
-    let mut meta: Vec<(u32, f32)> = Vec::with_capacity(page_indices.len());
-
-    for &page_idx in page_indices {
-        let page = doc
-            .pages()
-            .get(page_idx as u16)
-            .with_context(|| format!("pdfium: page {page_idx} out of range"))?;
-
-        let page_h_pts = page.height().value;
-        let render_config = PdfRenderConfig::new().scale_page_by_factor(scale);
-        let dynamic_img = page
-            .render_with_config(&render_config)
-            .context("pdfium: page render failed")?
-            .as_image();
-
-        images.push(dynamic_img.to_rgb8());
-        meta.push((page_idx, page_h_pts));
-    }
-
-    // Batch OCR.
     let mut page_results: Vec<OcrPageResult> = Vec::new();
-    let mut img_idx = 0;
+    for batch_pages in page_indices.chunks(BATCH_SIZE) {
+        let mut batch = Vec::with_capacity(batch_pages.len());
+        let mut batch_meta: Vec<(u32, f32)> = Vec::with_capacity(batch_pages.len());
 
-    while !images.is_empty() {
-        let batch_size = images.len().min(BATCH_SIZE);
-        let batch: Vec<_> = images.drain(..batch_size).collect();
-        let batch_meta = &meta[img_idx..img_idx + batch_size];
-        img_idx += batch_size;
+        for &page_idx in batch_pages {
+            let page = doc
+                .pages()
+                .get(page_idx as u16)
+                .with_context(|| format!("pdfium: page {page_idx} out of range"))?;
+
+            let page_h_pts = page.height().value;
+            let dynamic_img = page
+                .render_with_config(&render_config)
+                .context("pdfium: page render failed")?
+                .as_image();
+
+            batch.push(dynamic_img.to_rgb8());
+            batch_meta.push((page_idx, page_h_pts));
+        }
 
         let outputs = ocr.predict(batch).context("OCR batch predict failed")?;
 
