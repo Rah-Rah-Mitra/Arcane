@@ -54,23 +54,30 @@ For PDFs with broken font encoding, Arcane can fall back to image-based OCR:
 cargo build --release --features ocr
 ```
 
-You also need the following files in a `models/` directory next to the binary:
+Then download all required models and runtime libraries:
 
-| File | Source |
-|------|--------|
-| `pp-ocrv5_mobile_det.onnx` | [oar-ocr v0.3.0](https://github.com/GreatV/oar-ocr/releases/tag/v0.3.0) |
-| `en_pp-ocrv5_mobile_rec.onnx` | [oar-ocr v0.3.0](https://github.com/GreatV/oar-ocr/releases/tag/v0.3.0) |
-| `ppocrv5_en_dict.txt` | [oar-ocr v0.3.0](https://github.com/GreatV/oar-ocr/releases/tag/v0.3.0) |
-| `onnxruntime.dll` (Windows) | [ONNX Runtime v1.24.1](https://github.com/microsoft/onnxruntime/releases/tag/v1.24.1) |
-| `pdfium.dll` (Windows) | [pdfium-binaries](https://github.com/bblanchon/pdfium-binaries/releases) |
-
-Place `pdfium.dll` next to the `arcane` binary. Set `ORT_DYLIB_PATH` if `onnxruntime.dll` is not next to the binary.
-
-For non-English PDFs, override the recognition model and dictionary:
 ```bash
-set ARCANE_OCR_REC_MODEL=models/pp-ocrv5_mobile_rec.onnx
-set ARCANE_OCR_DICT=models/ppocrv5_dict.txt
+arcane init-ocr
 ```
+
+This downloads PaddleOCR v5 models, ONNX Runtime, and PDFium to `~/Arcane/models/`.
+Everything is auto-detected at runtime — no environment variables needed.
+
+Options:
+- `--force` — re-download even if files exist
+- `--skip-runtime` — skip ONNX Runtime and PDFium (only download models)
+- `--models-dir <path>` — override the download directory
+
+#### Advanced: Manual Path Overrides
+
+For non-English PDFs or custom model locations, set these environment variables:
+
+| Variable | Purpose |
+|----------|---------|
+| `ARCANE_OCR_DET_MODEL` | Detection ONNX model |
+| `ARCANE_OCR_REC_MODEL` | Recognition ONNX model (e.g. Chinese) |
+| `ARCANE_OCR_DICT` | Recognition dictionary |
+| `ORT_DYLIB_PATH` | ONNX Runtime shared library |
 
 ### Installing Locally
 
@@ -553,6 +560,27 @@ arcane chunk  "Project" --source "Book Title" --depth 1
 - The `--toc-pages` flag provides ~40% speedup and 100% deterministic matching when you know where the TOC is
 - LaTeX books (Computer Modern fonts: CMBX12, CMBX17) work particularly well
 - Use `--json` to pipe results into other tools or scripts
+
+### `arcane init-ocr [--models-dir DIR] [--skip-runtime] [--force]`
+
+Downloads all OCR model files and runtime libraries (ONNX Runtime, PDFium) for the current platform to `~/Arcane/models/`. Files are auto-detected at runtime — no environment variables needed.
+
+**Options:**
+- `--models-dir DIR`: Override the download directory (default: `~/Arcane/models/`)
+- `--skip-runtime`: Only download model files, skip ONNX Runtime and PDFium DLLs
+- `--force`: Re-download files even if they already exist
+
+**Example:**
+```bash
+# Download everything (first-time setup)
+arcane init-ocr
+
+# Force re-download
+arcane init-ocr --force
+
+# Models only (you already have ONNX Runtime and PDFium)
+arcane init-ocr --skip-runtime
+```
 
 ### `arcane remove <project> [source]`
 

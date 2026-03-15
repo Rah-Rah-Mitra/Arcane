@@ -41,6 +41,17 @@ pub fn originals_dir(project_name: &str) -> Result<PathBuf> {
     Ok(dir)
 }
 
+/// Returns `~/Arcane/models/` (created on demand).
+///
+/// Used by `init-ocr` to store downloaded OCR model files, and by
+/// `ocr.rs` to resolve model paths at runtime.
+pub fn models_dir() -> Result<PathBuf> {
+    let dir = arcane_root()?.join("models");
+    fs::create_dir_all(&dir)
+        .with_context(|| format!("failed to create models directory at {}", dir.display()))?;
+    Ok(dir)
+}
+
 /// Returns `~/Arcane/Library/[project_name]/Chunks` (created on demand).
 pub fn chunks_dir(project_name: &str) -> Result<PathBuf> {
     let dir = project_dir(project_name)?.join("Chunks");

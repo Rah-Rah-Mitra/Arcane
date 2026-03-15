@@ -321,6 +321,25 @@ pub enum Commands {
         output: Option<PathBuf>,
     },
 
+    /// Download OCR model files and runtime libraries to ~/Arcane/models/.
+    ///
+    /// Downloads PaddleOCR v5 models, ONNX Runtime, and PDFium for the
+    /// current platform.  After this command, `arcane recover-outline` will
+    /// auto-detect the models — no environment variables needed.
+    InitOcr {
+        /// Override the models directory (default: ~/Arcane/models/).
+        #[arg(long)]
+        models_dir: Option<PathBuf>,
+
+        /// Skip downloading runtime libraries (onnxruntime, pdfium).
+        #[arg(long)]
+        skip_runtime: bool,
+
+        /// Force re-download even if files already exist.
+        #[arg(long)]
+        force: bool,
+    },
+
     /// Correlate detected chapter headings with TOC entries to find the
     /// physical-to-logical page offset.
     ///
