@@ -163,6 +163,7 @@ pub fn load_seeds_from_pdf(ref_path: &Path, max_depth: u32) -> Result<Vec<SeedEn
 ///   - Extract that page's text from the target document.
 ///   - Compute fuzzy similarity between the seed title and each line of the text.
 ///   - If the best line similarity ≥ `fuzzy_threshold`, the seed *votes* for `d`.
+///
 /// The offset with the most votes wins.
 pub fn calculate_offset_from_seeds(
     seeds: &[SeedEntry],

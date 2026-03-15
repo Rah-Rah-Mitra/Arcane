@@ -645,7 +645,7 @@ pub fn cmd_recover_outline(
             "\nSeed verification: {} confirmed, {} estimated, {} out-of-range",
             confirmed, estimated, out_of_range
         );
-        println!("  {:<5} {:<6} {}", "Page", "Status", "Title");
+        println!("  {:<5} {:<6} Title", "Page", "Status");
         println!("  {}", "\u{2500}".repeat(72));
         for s in seed_ver {
             let flag = match s.status {
