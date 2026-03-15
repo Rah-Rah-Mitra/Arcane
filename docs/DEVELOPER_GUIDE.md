@@ -69,6 +69,9 @@ src/
 │   ├── ocr.rs              # OCR overlay tier (optional, behind `ocr` feature flag)
 │   ├── worker.rs           # Persistent OCR worker (IPC server/client + lifecycle)
 │   ├── seed.rs             # Seeded outline recovery (reference PDF / JSON seed file)
+│   ├── ocr_ir.rs           # OCR intermediate representation: blocks/lines/words normalization (optional, behind ocr feature flag)
+│   ├── toc_extract.rs      # TOC entry extraction from OCR IR: parsing, stitching, offset (optional, behind ocr feature flag)
+│   ├── toc_hierarchy.rs    # Hierarchy reconstruction: numbering + indent + font-size signals (optional, behind ocr feature flag)
 │   ├── ops.rs              # Structural PDF operations (merge, split, rotate, encrypt)
 │   └── writer.rs           # Low-level PDF writing helpers
 ├── search/
@@ -415,6 +418,45 @@ When a PDF has broken font encoding (garbled text), heuristic heading detection 
 
 **Offset fallback logic:** When seed vote returns `None` (garbled text gives 0 similarity for all seeds) and standard `offset::calculate_offset()` confidence < 30%, the pipeline defaults to offset=0 — correct for same-book copies where pages are at identical positions.
 
+#### OCR-Based TOC Reconstruction (`--ocr` pipeline)
+
+When `--ocr` is specified on `recover-outline`, a dedicated pipeline is invoked that
+bypasses font-size heuristics entirely:
+
+1. **OCR** — renders TOC pages via pdfium and recognizes text with oar-ocr
+2. **IR Normalization** (`ocr_ir.rs`) — structures raw regions into blocks > lines > words
+   with reading-order sorting, line merging, dehyphenation, and noise filtering
+3. **TOC Parsing** (`toc_extract.rs`) — extracts (title, page_number) entries with dot-leader
+   handling, continuation-line stitching, and roman/arabic numeral support
+4. **Hierarchy** (`toc_hierarchy.rs`) — assigns depth levels using weighted signals from
+   numbering semantics (0.5), indent clustering (0.3), and font-size hints (0.2)
+5. **Offset** (`toc_extract.rs`) — RANSAC consensus voting to derive the physical-to-printed
+   page offset, with separate handling for roman preface and arabic body zones
+6. **Injection** — reuses `finish_pipeline()` and `inject_hierarchical_outlines()` from the
+   existing pipeline
+
+```
+pipeline.rs: recover_outline_ocr()
+    │
+    ├── probe.rs              — Classify document
+    ├── ocr.rs                — extract_text_ocr() on TOC pages
+    ├── ocr_ir.rs             — normalize_pages() → Vec<OcrPage>
+    │       └── OcrPage { blocks: Vec<OcrBlock { lines: Vec<OcrLine { words }> }> }
+    ├── toc_extract.rs        — extract_toc_entries() → Vec<TocEntry>
+    │       └── estimate_offset_from_toc() → OcrOffsetResult
+    ├── toc_hierarchy.rs      — assign_hierarchy() → Vec<HierarchicalTocEntry>
+    └── pipeline.rs           — finish_pipeline() (shared with heuristic + seeded paths)
+            └── heuristics.rs — inject_hierarchical_outlines()
+```
+
+**Key types:**
+- `OcrPage` / `OcrBlock` / `OcrLine` / `OcrWord` — structured OCR intermediate representation
+- `TocEntry` — parsed TOC line (title, page number, source page, x-position, font size)
+- `OcrOffsetResult` — RANSAC offset with confidence and warnings
+- `HierarchicalTocEntry` — TOC entry with assigned depth level
+- `HierarchyConfig` — weights for numbering (0.5), indent (0.3), font-size (0.2) signals
+- `OcrPipelineConfig` — OCR pipeline settings (dpi, lang, model, manual_offset, debug_layout)
+
 #### OCR Overlay Tier (`src/pdf/ocr.rs`)
 
 Behind the `ocr` feature flag, Arcane includes an OCR overlay tier for PDFs with broken font encoding or scanned pages. The module uses:
@@ -642,6 +684,9 @@ Key test areas:
   - page-number detection, anchor detection
 - `pdf/offset.rs`: TOC line parsing, fuzzy similarity, page-number consensus, range filtering
 - `pdf/pipeline.rs`: Heading merging, chapter map building, line similarity, HeadingInfo conversion
+- `pdf/ocr_ir.rs`: Reading order normalization, line fragment merging, dehyphenation, noise filtering, block grouping, two-column sort (requires `--features ocr`)
+- `pdf/toc_extract.rs`: TOC line parsing (simple, dotted, roman), appendix numbering, continuation stitching, title cleaning, offset consensus, mixed roman/arabic (requires `--features ocr`)
+- `pdf/toc_hierarchy.rs`: Numbering depth parsing, hierarchy from numbering/indent/mixed signals, depth-skip sanitization (requires `--features ocr`)
 - `pdf/page_labels.rs`: Roman numeral conversion, label resolution
 - `pdf/ops.rs`: Input validation for merge, split, rotate, encrypt
 - `search/indexer.rs`: Index creation, page indexing

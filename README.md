@@ -121,7 +121,7 @@ Chapter PDFs are written to `~/Arcane/Library/<Project>/Chunks/<Source>/`.
 | `arcane detect-layout <file> [--json] [--pages RANGE]` | Detect structural anchors via statistical typographic profiling. `--pages`: 0-based range (e.g. "0-5") |
 | `arcane find-offset <file> [--toc-pages RANGE] [--json]` | Calculate logical-to-physical page offset. `--toc-pages`: 1-based (e.g. "3-5") |
 | `arcane sync-pages <file> [--toc-pages RANGE] [--threshold T] [--json]` | RANSAC consensus offset from heading↔TOC matching. `--threshold` default: 0.6 (range: 0.0–1.0). `--toc-pages`: 1-based |
-| `arcane recover-outline <file> [--output PATH] [--dry-run] [--min-font-ratio R] [--depth N] [--toc-pages RANGE] [--no-inject] [--fuzzy-threshold T] [--json] [--seed-pdf PDF] [--seed-file JSON] [--seed-tolerance N]` | Recover and inject outline bookmarks. `--min-font-ratio` default: 1.2. `--depth` default: 2 (1 = chapters, 2 = +sections). `--fuzzy-threshold` default: 0.6 (0.0–1.0). `--seed-tolerance` default: 5. `--seed-pdf` and `--seed-file` are mutually exclusive |
+| `arcane recover-outline <file> [--output PATH] [--dry-run] [--min-font-ratio R] [--depth N] [--toc-pages RANGE] [--no-inject] [--fuzzy-threshold T] [--json] [--seed-pdf PDF] [--seed-file JSON] [--seed-tolerance N] [--ocr] [--ocr-dpi N] [--ocr-lang LANG] [--ocr-model NAME] [--toc-start-page N] [--toc-end-page N] [--debug-layout] [--page-offset N]` | Recover and inject outline bookmarks. `--min-font-ratio` default: 1.2. `--depth` default: 2 (1 = chapters, 2 = +sections). `--fuzzy-threshold` default: 0.6 (0.0–1.0). `--seed-tolerance` default: 5. `--ocr`: force OCR-based TOC reconstruction. `--ocr-dpi` default: 150. `--page-offset`: manual override |
 | `arcane ocr run <file> --pages RANGE [--dpi N] [--json]` | Run OCR on a page range. `--pages` required, 1-based (e.g. "1-5"). `--dpi` default: 150. Uses running OCR worker if available; otherwise starts a temporary worker automatically |
 | `arcane ocr init` | Validate OCR setup and warm the worker once (start + health-check + stop) |
 | `arcane ocr start [--idle-timeout-secs N]` | Start persistent background OCR worker (best for repeated OCR-heavy workflows) |
@@ -172,6 +172,44 @@ arcane recover-outline "book.pdf" --toc-pages 14-20 --output "book-fixed.pdf"
 
 `init-ocr` downloads everything to `~/Arcane/models/` and auto-detects at runtime.
 Use `--force` to re-download, `--skip-runtime` to skip ONNX Runtime and PDFium DLLs.
+
+### OCR-Based TOC Recovery
+
+For fully scanned PDFs or books where heuristic heading detection is unreliable,
+use the `--ocr` flag to reconstruct the Table of Contents directly from OCR:
+
+```bash
+# Preview what the OCR pipeline detects (always start with --dry-run)
+arcane recover-outline scanned-book.pdf --ocr --toc-pages 3-8 --dry-run
+
+# Alternative: specify start/end pages individually
+arcane recover-outline scanned-book.pdf --ocr --toc-start-page 3 --toc-end-page 8 --dry-run
+
+# Write the recovered outline into the PDF
+arcane recover-outline scanned-book.pdf --ocr --toc-pages 3-8 --output fixed.pdf
+
+# Manual page offset override (if auto-detection is wrong)
+arcane recover-outline scanned-book.pdf --ocr --toc-pages 3-8 --page-offset 18
+
+# Higher DPI for small or dense text (slower but more accurate)
+arcane recover-outline scanned-book.pdf --ocr --toc-pages 3-8 --ocr-dpi 200
+
+# Dump intermediate OCR layout for debugging
+arcane recover-outline scanned-book.pdf --ocr --toc-pages 3-8 --debug-layout 2>layout.json
+```
+
+**How it works:** The `--ocr` pipeline reads the specified TOC pages via OCR, parses
+structured entries (title + page number), reconstructs the chapter hierarchy from
+numbering patterns and indentation, estimates the page offset between printed page
+numbers and physical PDF pages, and injects hierarchical bookmarks.
+
+**Performance:** ~0.3 s/page at the default 150 DPI on CPU. For a 6-page TOC, expect
+~2 seconds total. Use `arcane ocr start` beforehand to avoid model-load overhead.
+
+**When to use `--ocr` vs the default pipeline:**
+- Default (no `--ocr`): Best for text-based PDFs with intact font encoding
+- `--ocr`: Required for scanned PDFs, or when the default produces no/bad results
+- `--seed-pdf`/`--seed-file`: Best when you have a reference copy with known titles
 
 For non-English PDFs, override the recognition model and dictionary via env vars:
 `ARCANE_OCR_REC_MODEL`, `ARCANE_OCR_DICT` (see `src/pdf/ocr.rs` for details).

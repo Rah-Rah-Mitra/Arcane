@@ -277,6 +277,45 @@ pub enum Commands {
         /// the default.
         #[arg(long, default_value_t = 5)]
         seed_tolerance: u32,
+
+        /// Force OCR-based TOC reconstruction.  Reads the specified TOC pages
+        /// via OCR, parses structured entries (title + page number), reconstructs
+        /// hierarchy, and injects bookmarks.  Requires `--features ocr` build
+        /// and `arcane init-ocr`.
+        #[arg(long)]
+        ocr: bool,
+
+        /// OCR render DPI (default 150).  Higher = more accurate but slower.
+        /// Only used with `--ocr`.
+        #[arg(long, default_value_t = 150)]
+        ocr_dpi: u32,
+
+        /// OCR language hint (default: en).  Reserved for future multi-language
+        /// model support.
+        #[arg(long, default_value = "en")]
+        ocr_lang: String,
+
+        /// OCR model variant name.  Reserved for future model selection.
+        #[arg(long)]
+        ocr_model: Option<String>,
+
+        /// First TOC page (1-based).  Alternative to `--toc-pages` range string.
+        #[arg(long)]
+        toc_start_page: Option<u32>,
+
+        /// Last TOC page (1-based).  Alternative to `--toc-pages` range string.
+        #[arg(long)]
+        toc_end_page: Option<u32>,
+
+        /// Emit intermediate OCR layout blocks (with bounding boxes and
+        /// confidence scores) to stderr for debugging.
+        #[arg(long)]
+        debug_layout: bool,
+
+        /// Manual page offset override.  Skips automatic offset estimation.
+        /// Accepts negative values (e.g. `--page-offset -3`).
+        #[arg(long, allow_hyphen_values = true)]
+        page_offset: Option<i32>,
     },
 
     /// Show the outline (bookmarks) and page labels of a PDF file.

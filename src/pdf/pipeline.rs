@@ -19,6 +19,27 @@ use super::seed::{self, ResolvedSeed, SeedEntry};
 // SeedEntry is used in recover_outline_seeded's public parameter.
 
 // ---------------------------------------------------------------------------
+// OCR pipeline config (feature-gated)
+// ---------------------------------------------------------------------------
+
+/// Configuration specific to the OCR-only pipeline (`--ocr` mode).
+#[cfg(feature = "ocr")]
+pub struct OcrPipelineConfig {
+    /// Render DPI for OCR (default 150).
+    pub dpi: u32,
+    /// Language hint (currently unused, reserved for future multi-lang).
+    #[allow(dead_code)]
+    pub lang: String,
+    /// Model variant (currently unused, reserved for server model selection).
+    #[allow(dead_code)]
+    pub model: Option<String>,
+    /// Manual page offset override (`--page-offset`).
+    pub manual_offset: Option<i32>,
+    /// Emit debug layout JSON to stderr (`--debug-layout`).
+    pub debug_layout: bool,
+}
+
+// ---------------------------------------------------------------------------
 // Configuration & result types
 // ---------------------------------------------------------------------------
 
@@ -748,6 +769,215 @@ fn build_chapter_map(headings: &[HeadingCandidate]) -> BTreeMap<u32, String> {
     map.into_iter()
         .map(|(page, h)| (page, h.text.clone()))
         .collect()
+}
+
+// ---------------------------------------------------------------------------
+// OCR-only pipeline (feature-gated)
+// ---------------------------------------------------------------------------
+
+/// Run the OCR-only TOC reconstruction pipeline.
+///
+/// Bypasses all font-histogram heuristics. Reads the TOC pages via OCR,
+/// parses structured entries, reconstructs hierarchy, estimates offset,
+/// and injects hierarchical outlines.
+///
+/// Called when `--ocr` is specified on the `recover-outline` command.
+#[cfg(feature = "ocr")]
+pub fn recover_outline_ocr(
+    doc: &mut Document,
+    path: &str,
+    config: &RecoveryConfig,
+    ocr_config: &OcrPipelineConfig,
+) -> Result<RecoveryResult> {
+    use super::{ocr, ocr_ir, toc_extract, toc_hierarchy};
+
+    // Phase 1: Probe.
+    let probe_result = probe::probe(doc, path);
+    let total_pages = probe_result.total_pages;
+
+    // Phase 2: Determine TOC page range.
+    let toc_range = config.toc_pages.unwrap_or_else(|| {
+        let end = (total_pages.saturating_sub(1)).min(14);
+        (0, end)
+    });
+    let toc_page_indices: Vec<u32> = (toc_range.0..=toc_range.1).collect();
+
+    tracing::info!(
+        "OCR pipeline: scanning TOC pages {}-{} ({} pages) at {} DPI",
+        toc_range.0,
+        toc_range.1,
+        toc_page_indices.len(),
+        ocr_config.dpi
+    );
+
+    // Phase 3: OCR the TOC pages.
+    let ocr_results = ocr::extract_text_ocr(
+        std::path::Path::new(path),
+        &toc_page_indices,
+        ocr_config.dpi,
+    )
+    .context("OCR failed on TOC pages")?;
+
+    // Phase 4: Get page dimensions from lopdf.
+    let page_dims = get_page_dimensions(doc, &toc_page_indices);
+
+    // Phase 5: Normalize OCR → IR.
+    let ocr_pages = ocr_ir::normalize_pages(&ocr_results, &page_dims);
+
+    // Debug output.
+    if ocr_config.debug_layout {
+        if let Ok(debug_json) = serde_json::to_string_pretty(&ocr_pages) {
+            eprintln!("[debug-layout]\n{debug_json}");
+        }
+    }
+
+    // Phase 6: Extract TOC entries.
+    let toc_entries = toc_extract::extract_toc_entries(&ocr_pages);
+
+    if toc_entries.is_empty() {
+        tracing::warn!(
+            "OCR pipeline: no TOC entries found on pages {}-{}",
+            toc_range.0,
+            toc_range.1
+        );
+        return Ok(RecoveryResult {
+            probe: probe_result,
+            layout: None,
+            offset: None,
+            headings: vec![],
+            chapter_map: std::collections::BTreeMap::new(),
+            verification: vec![],
+            injected_count: None,
+            seed_verification: None,
+        });
+    }
+
+    tracing::info!("OCR pipeline: extracted {} TOC entries", toc_entries.len());
+
+    // Phase 7: Assign hierarchy.
+    let hierarchy_config = toc_hierarchy::HierarchyConfig {
+        max_depth: config.max_depth,
+        ..toc_hierarchy::HierarchyConfig::default()
+    };
+    let hierarchical = toc_hierarchy::assign_hierarchy(&toc_entries, &hierarchy_config);
+
+    // Phase 8: Estimate page offset.
+    let offset_result =
+        toc_extract::estimate_offset_from_toc(&toc_entries, doc, ocr_config.manual_offset);
+
+    for warning in &offset_result.warnings {
+        tracing::warn!("OCR offset: {warning}");
+    }
+
+    let active_offset = ocr_config
+        .manual_offset
+        .unwrap_or(offset_result.arabic_offset);
+
+    tracing::info!(
+        "OCR pipeline: using offset {:+} (confidence: {:.0}%)",
+        active_offset,
+        offset_result.confidence * 100.0
+    );
+
+    // Phase 9: Convert to HeadingCandidates with physical page indices.
+    let headings: Vec<HeadingCandidate> = hierarchical
+        .iter()
+        .filter_map(|h| {
+            let page_num = h.entry.page_number?;
+            let physical = (page_num as i32 - 1 + active_offset) as i64;
+            if physical < 0 || physical >= total_pages as i64 {
+                return None;
+            }
+            Some(HeadingCandidate {
+                page_index: physical as u32,
+                font_size: match h.depth {
+                    1 => 18.0,
+                    2 => 14.0,
+                    _ => 12.0,
+                },
+                text: h.entry.title.clone(),
+                y_position: None,
+                depth_level: h.depth,
+            })
+        })
+        .collect();
+
+    if headings.is_empty() {
+        tracing::warn!("OCR pipeline: no headings after page-offset mapping");
+        return Ok(RecoveryResult {
+            probe: probe_result,
+            layout: None,
+            offset: None,
+            headings: vec![],
+            chapter_map: std::collections::BTreeMap::new(),
+            verification: vec![],
+            injected_count: None,
+            seed_verification: None,
+        });
+    }
+
+    tracing::info!(
+        "OCR pipeline: {} heading(s) mapped to physical pages",
+        headings.len()
+    );
+
+    // Phase 10: Finish pipeline (verify + inject).
+    let pipeline_offset = Some(OffsetResult {
+        offset: active_offset as i32,
+        confidence: offset_result.confidence,
+        method: OffsetMethod::OcrTocParsing,
+        evidence: vec![],
+    });
+
+    finish_pipeline(
+        doc,
+        path,
+        config,
+        probe_result,
+        None,
+        headings,
+        pipeline_offset,
+    )
+}
+
+/// Get page dimensions from the lopdf Document for specified page indices.
+///
+/// Parses the `/MediaBox` from each page dictionary, defaulting to US Letter
+/// (612×792 points) if not found.
+#[cfg(feature = "ocr")]
+fn get_page_dimensions(doc: &Document, page_indices: &[u32]) -> Vec<(f32, f32)> {
+    use lopdf::Object;
+
+    let pages = doc.get_pages();
+
+    page_indices
+        .iter()
+        .map(|&idx| {
+            let page_num = idx + 1; // lopdf uses 1-based
+            if let Some(&page_oid) = pages.get(&page_num) {
+                if let Ok(page_dict) = doc.get_dictionary(page_oid) {
+                    if let Ok(Object::Array(media_box)) = page_dict.get(b"MediaBox") {
+                        if media_box.len() == 4 {
+                            let w = obj_to_f32(&media_box[2]).unwrap_or(612.0);
+                            let h = obj_to_f32(&media_box[3]).unwrap_or(792.0);
+                            return (w, h);
+                        }
+                    }
+                }
+            }
+            (612.0, 792.0) // US Letter default
+        })
+        .collect()
+}
+
+/// Extract an f32 from a lopdf Object (Integer or Real).
+#[cfg(feature = "ocr")]
+fn obj_to_f32(obj: &lopdf::Object) -> Option<f32> {
+    match obj {
+        lopdf::Object::Integer(i) => Some(*i as f32),
+        lopdf::Object::Real(r) => Some(*r as f32),
+        _ => None,
+    }
 }
 
 // ---------------------------------------------------------------------------

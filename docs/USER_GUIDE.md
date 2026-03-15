@@ -560,6 +560,14 @@ Recovers and injects outline bookmarks into PDFs that have no `/Outlines`, using
 - `--seed-pdf PATH`: Path to a reference PDF whose `/Outlines` provide ground-truth chapter titles (see [Seeded Recovery](#seeded-outline-recovery) below)
 - `--seed-file PATH`: Path to a JSON file with known chapter titles and page numbers (alternative to `--seed-pdf`)
 - `--seed-tolerance N`: ±N page search window when locating seed titles in the target PDF (default: 5)
+- `--ocr`: Force OCR-based TOC reconstruction (reads TOC pages via OCR instead of font heuristics). Requires `--features ocr` build and `arcane init-ocr`
+- `--ocr-dpi N`: Render resolution for OCR (default: 150). Higher = more accurate but slower
+- `--ocr-lang LANG`: OCR language hint (default: en). Reserved for future multi-language support
+- `--ocr-model NAME`: OCR model variant. Reserved for future model selection
+- `--toc-start-page N`: First TOC page (1-based). Alternative to `--toc-pages` range string
+- `--toc-end-page N`: Last TOC page (1-based). Alternative to `--toc-pages` range string
+- `--debug-layout`: Emit intermediate OCR blocks with bounding boxes and confidence to stderr (for debugging)
+- `--page-offset N`: Manual page offset override (skips automatic estimation). Accepts negative values
 
 **Workflow:**
 ```bash
@@ -1053,6 +1061,47 @@ arcane recover-outline ~/Books/textbook.pdf \
 arcane outline ~/Books/textbook-fixed.pdf
 ```
 
+### Workflow: OCR-Based TOC Recovery (Automatic)
+
+When you have a scanned PDF and want to automatically reconstruct the outline
+from its Table of Contents pages without manually creating a seed file:
+
+```bash
+# 1. Classify the PDF — confirm it's scanned or has broken encoding
+arcane probe ~/Books/scanned-textbook.pdf
+
+# 2. Preview what the OCR pipeline detects on the TOC pages
+#    (You need to know which pages contain the Table of Contents)
+arcane recover-outline ~/Books/scanned-textbook.pdf \
+  --ocr --toc-pages 5-10 --dry-run
+
+# 3. If the output looks good, inject the bookmarks
+arcane recover-outline ~/Books/scanned-textbook.pdf \
+  --ocr --toc-pages 5-10 \
+  --output ~/Books/scanned-textbook-fixed.pdf
+
+# 4. If page numbers are wrong, override the offset manually
+#    (e.g., if printed "page 1" is at physical page 15, offset = 14)
+arcane recover-outline ~/Books/scanned-textbook.pdf \
+  --ocr --toc-pages 5-10 --page-offset 14 \
+  --output ~/Books/scanned-textbook-fixed.pdf
+
+# 5. Verify the result
+arcane outline ~/Books/scanned-textbook-fixed.pdf --depth 3
+
+# 6. Add to your project and chunk
+arcane add "Project" ~/Books/scanned-textbook-fixed.pdf --textbook
+arcane chunk "Project" --depth 1
+```
+
+**Tips for OCR recovery:**
+- Always use `--dry-run` first to verify detected entries before writing
+- Use `--debug-layout 2>layout.json` to inspect the raw OCR output if entries are missing
+- Increase `--ocr-dpi` to 200-300 if text is small or the scan quality is low
+- Start the OCR worker first (`arcane ocr start`) for faster repeated invocations
+- If the automatic page offset is wrong, use `--page-offset N` to override it
+- The pipeline handles roman numeral front matter (i, ii, iii...) separately from arabic body pages
+
 ### Understanding `body_font_size`
 
 The `body_font_size` field in `detect-layout` output is the mode of the effective font-size distribution — the size that the majority of body text uses. It is derived from the full typographic profile (μ, σ, histogram mode over 50 pages), so it is robust against outliers like large chapter titles or tiny footnotes.
@@ -1212,6 +1261,29 @@ chmod -R u+w ~/Arcane/
 ### Windows: Symlinks not working
 
 On Windows, Arcane will automatically fall back to copying files if symlink creation fails. This means your PDFs will be duplicated rather than linked.
+
+### OCR recovery finds no entries or wrong entries
+
+**Possible causes:**
+
+1. **Wrong TOC pages**: The `--toc-pages` range doesn't cover the actual Table of Contents.
+   Use `arcane ocr run book.pdf --pages "1-15"` to read the first pages and find where the TOC is.
+
+2. **Low scan quality**: Increase DPI with `--ocr-dpi 200` or `--ocr-dpi 300`.
+
+3. **Non-English text**: Set `--ocr-lang` to the correct language code (requires appropriate model).
+
+4. **Wrong page offset**: The automatic offset estimation may fail if very few TOC entries
+   match the document text. Use `--page-offset N` to set it manually.
+
+**Debugging:**
+```bash
+# See exactly what the OCR reads on each TOC page
+arcane ocr run book.pdf --pages "5-10" --json
+
+# See the intermediate OCR layout with bounding boxes
+arcane recover-outline book.pdf --ocr --toc-pages 5-10 --debug-layout --dry-run 2>layout.json
+```
 
 ## Tips and Best Practices
 

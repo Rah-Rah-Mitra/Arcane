@@ -502,6 +502,14 @@ pub fn cmd_recover_outline(
     seed_pdf: Option<std::path::PathBuf>,
     seed_file: Option<std::path::PathBuf>,
     seed_tolerance: u32,
+    ocr: bool,
+    ocr_dpi: u32,
+    ocr_lang: String,
+    ocr_model: Option<String>,
+    toc_start_page: Option<u32>,
+    toc_end_page: Option<u32>,
+    debug_layout: bool,
+    page_offset: Option<i32>,
 ) -> Result<()> {
     use crate::pdf::pipeline::{self, RecoveryConfig};
     use crate::pdf::seed;
@@ -531,6 +539,14 @@ pub fn cmd_recover_outline(
         (None, None) => None,
     };
 
+    // Resolve --toc-start-page / --toc-end-page into toc_range if set.
+    let toc_range = match (toc_start_page, toc_end_page, toc_range) {
+        (Some(s), Some(e), _) if s >= 1 && e >= s => Some((s - 1, e - 1)),
+        (Some(s), None, _) if s >= 1 => Some((s - 1, s - 1)),
+        (None, Some(e), _) if e >= 1 => Some((0, e - 1)),
+        (_, _, existing) => existing,
+    };
+
     let config = RecoveryConfig {
         min_font_ratio: min_font_ratio as f32,
         max_depth: depth,
@@ -542,10 +558,39 @@ pub fn cmd_recover_outline(
     };
 
     let path_str = file.display().to_string();
-    let result = if let Some(seed_entries) = seeds {
+
+    // OCR-only pipeline branch.
+    let result = if ocr {
+        #[cfg(feature = "ocr")]
+        {
+            use crate::pdf::pipeline::OcrPipelineConfig;
+
+            let ocr_config = OcrPipelineConfig {
+                dpi: ocr_dpi,
+                lang: ocr_lang,
+                model: ocr_model,
+                manual_offset: page_offset,
+                debug_layout,
+            };
+
+            pipeline::recover_outline_ocr(&mut doc, &path_str, &config, &ocr_config)
+                .context("OCR outline recovery pipeline failed")?
+        }
+        #[cfg(not(feature = "ocr"))]
+        {
+            // Silence unused variable warnings in the non-ocr build.
+            let _ = (ocr_dpi, ocr_lang, ocr_model, debug_layout, page_offset);
+            anyhow::bail!(
+                "--ocr requires the OCR feature. Rebuild with: cargo build --features ocr"
+            );
+        }
+    } else if let Some(seed_entries) = seeds {
+        // Silence unused variable warnings for OCR args in non-OCR path.
+        let _ = (ocr_dpi, ocr_lang, ocr_model, debug_layout, page_offset);
         pipeline::recover_outline_seeded(&mut doc, &path_str, &config, seed_entries)
             .context("seeded outline recovery pipeline failed")?
     } else {
+        let _ = (ocr_dpi, ocr_lang, ocr_model, debug_layout, page_offset);
         pipeline::recover_outline(&mut doc, &path_str, &config)
             .context("outline recovery pipeline failed")?
     };

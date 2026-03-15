@@ -20,6 +20,12 @@ pub mod writer;
 #[cfg(feature = "ocr")]
 pub mod ocr;
 #[cfg(feature = "ocr")]
+pub mod ocr_ir;
+#[cfg(feature = "ocr")]
+pub mod toc_extract;
+#[cfg(feature = "ocr")]
+pub mod toc_hierarchy;
+#[cfg(feature = "ocr")]
 pub mod worker;
 
 // Re-export string helpers used across the PDF module.

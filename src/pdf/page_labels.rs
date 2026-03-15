@@ -335,7 +335,7 @@ fn to_roman(mut n: u32) -> String {
 }
 
 #[allow(dead_code)]
-fn from_roman(s: &str) -> Option<u32> {
+pub(crate) fn from_roman(s: &str) -> Option<u32> {
     let roman_val = |c: char| -> Option<u32> {
         match c {
             'I' => Some(1),

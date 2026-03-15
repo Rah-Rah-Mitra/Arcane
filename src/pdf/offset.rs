@@ -47,6 +47,8 @@ pub enum OffsetMethod {
     UserSupplied,
     /// Derived from matching seed chapter titles against the target document.
     SeedBased,
+    /// Derived from OCR-based TOC page parsing.
+    OcrTocParsing,
 }
 
 /// A single piece of evidence supporting the offset calculation.
