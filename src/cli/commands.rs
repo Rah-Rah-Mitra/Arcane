@@ -1834,3 +1834,105 @@ fn extract_from_tgz(archive: &std::path::Path, inner: &str, dest: &std::path::Pa
     }
     anyhow::bail!("{inner} not found in archive {}", archive.display())
 }
+
+// ---------------------------------------------------------------------------
+// ocr worker commands
+// ---------------------------------------------------------------------------
+
+pub fn cmd_ocr_worker_init() -> Result<()> {
+    #[cfg(not(feature = "ocr"))]
+    {
+        anyhow::bail!(
+            "OCR support is not compiled in.\n\
+             Rebuild with: cargo build --release --features ocr\n\
+             Then run: arcane init-ocr"
+        );
+    }
+    #[cfg(feature = "ocr")]
+    {
+        if crate::pdf::worker::try_connect().is_some() {
+            println!("[arcane] OCR worker is already running and initialized.");
+            return Ok(());
+        }
+
+        println!("[arcane] Initializing OCR worker (warm-up)…");
+        crate::pdf::worker::cmd_start(None)?;
+        crate::pdf::worker::cmd_stop()?;
+        println!("[arcane] OCR initialization complete.");
+        Ok(())
+    }
+}
+
+pub fn cmd_ocr_worker_start(idle_timeout_secs: Option<u64>) -> Result<()> {
+    #[cfg(not(feature = "ocr"))]
+    {
+        let _ = idle_timeout_secs;
+        anyhow::bail!(
+            "OCR support is not compiled in.\n\
+             Rebuild with: cargo build --release --features ocr\n\
+             Then run: arcane init-ocr"
+        );
+    }
+    #[cfg(feature = "ocr")]
+    {
+        crate::pdf::worker::cmd_start(idle_timeout_secs)
+    }
+}
+
+pub fn cmd_ocr_worker_stop() -> Result<()> {
+    #[cfg(not(feature = "ocr"))]
+    {
+        anyhow::bail!(
+            "OCR support is not compiled in.\n\
+             Rebuild with: cargo build --release --features ocr"
+        );
+    }
+    #[cfg(feature = "ocr")]
+    {
+        crate::pdf::worker::cmd_stop()
+    }
+}
+
+pub fn cmd_ocr_worker_status() -> Result<()> {
+    #[cfg(not(feature = "ocr"))]
+    {
+        anyhow::bail!(
+            "OCR support is not compiled in.\n\
+             Rebuild with: cargo build --release --features ocr"
+        );
+    }
+    #[cfg(feature = "ocr")]
+    {
+        crate::pdf::worker::cmd_status()
+    }
+}
+
+pub fn cmd_ocr_worker_restart(idle_timeout_secs: Option<u64>) -> Result<()> {
+    #[cfg(not(feature = "ocr"))]
+    {
+        let _ = idle_timeout_secs;
+        anyhow::bail!(
+            "OCR support is not compiled in.\n\
+             Rebuild with: cargo build --release --features ocr"
+        );
+    }
+    #[cfg(feature = "ocr")]
+    {
+        crate::pdf::worker::cmd_restart(idle_timeout_secs)
+    }
+}
+
+pub fn cmd_worker_serve(idle_timeout_secs: Option<u64>) -> Result<()> {
+    #[cfg(not(feature = "ocr"))]
+    {
+        let _ = idle_timeout_secs;
+        anyhow::bail!(
+            "OCR support is not compiled in.\n\
+             Rebuild with: cargo build --release --features ocr"
+        );
+    }
+    #[cfg(feature = "ocr")]
+    {
+        crate::pdf::worker::serve_loop(idle_timeout_secs)
+    }
+}

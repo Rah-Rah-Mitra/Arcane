@@ -67,6 +67,7 @@ src/
 │   ├── page_labels.rs      # /PageLabels parsing and resolution
 │   ├── text.rs             # Text extraction from PDF pages
 │   ├── ocr.rs              # OCR overlay tier (optional, behind `ocr` feature flag)
+│   ├── worker.rs           # Persistent OCR worker (IPC server/client + lifecycle)
 │   ├── seed.rs             # Seeded outline recovery (reference PDF / JSON seed file)
 │   ├── ops.rs              # Structural PDF operations (merge, split, rotate, encrypt)
 │   └── writer.rs           # Low-level PDF writing helpers
@@ -150,8 +151,10 @@ The CLI layer uses `clap` derive macros for declarative command definitions in `
 - `cmd_tag()` / `cmd_untag()`: Tag management
 - `cmd_merge()` / `cmd_split()` / `cmd_rotate()`: Structural PDF operations
 - `cmd_protect()` / `cmd_unlock()`: PDF encryption
-- `cmd_ocr()`: Runs OCR on a page range and outputs recognized text (requires `--features ocr`)
+- `cmd_ocr()`: Runs OCR on a page range and outputs recognized text (requires `--features ocr`, wired to `arcane ocr run`)
 - `cmd_init_ocr()`: Downloads OCR models + runtime DLLs to `~/Arcane/models/`
+- `cmd_ocr_worker_init()` / `cmd_ocr_worker_start()` / `cmd_ocr_worker_stop()` / `cmd_ocr_worker_status()` / `cmd_ocr_worker_restart()`: OCR worker lifecycle management
+- `cmd_worker_serve()`: Internal worker server loop (hidden command)
 - `cmd_watch()`: File system watcher
 - `cmd_tui()`: Interactive terminal UI
 
@@ -421,18 +424,26 @@ Behind the `ocr` feature flag, Arcane includes an OCR overlay tier for PDFs with
 - **ort (load-dynamic)**: Loads ONNX Runtime at runtime via `ORT_DYLIB_PATH`
 
 ```
-extract_headings_ocr(path, page_indices, dpi)    → Vec<PositionedText>
-    │                                               (heading-sized regions only)
+extract_headings_ocr(path, page_indices, dpi)          → Vec<PositionedText>
+    │                                                     (worker-routed API)
+    ├── If worker is running: IPC request to worker
+    ├── If worker absent: start temporary worker, request, stop
+    └── Fallback: extract_headings_ocr_direct() in-process
+
+extract_headings_ocr_direct(path, page_indices, dpi)   → Vec<PositionedText>
     ├── ensure_ort_loaded()      — OnceLock-guarded DLL init (once per process)
     ├── get_ocr_engine()         — OnceLock-cached OAROCR (built once, reused)
     ├── bind_pdfium()            — ~/Arcane/models/ → CWD → system search
-    ├── Phase 1: render pages    — All pages → Vec<RgbImage>
-    ├── Phase 2: batch predict   — Chunks of 16 images → single predict() call
-    ├── Filter box_h ≥ 1.5%     — Keep heading-sized regions only
-    └── Pixel → PDF coords      — Flip Y, scale by 72/dpi → PositionedText
+    ├── Render + batch predict   — Chunks of up to 16 pages
+    ├── Filter box_h ≥ 1.5%      — Keep heading-sized regions only
+    └── Pixel → PDF coords       — Flip Y, scale by 72/dpi → PositionedText
 
-extract_text_ocr(path, page_indices, dpi)        → Vec<OcrPageResult>
-    │                                               (all text, not just headings)
+extract_text_ocr(path, page_indices, dpi)              → Vec<OcrPageResult>
+    │                                                     (worker-routed API)
+    ├── Same worker lifecycle behavior as headings path
+    └── Fallback: extract_text_ocr_direct() in-process
+
+extract_text_ocr_direct(path, page_indices, dpi)       → Vec<OcrPageResult>
     ├── Same render + batch pipeline as above
     ├── No bounding-box height filter (returns everything)
     ├── Lower confidence threshold (0.4 vs 0.6)
@@ -440,7 +451,18 @@ extract_text_ocr(path, page_indices, dpi)        → Vec<OcrPageResult>
         └── OcrRegion { text, confidence, x, y, font_size }
 ```
 
-The `arcane ocr` command uses `extract_text_ocr()` to expose full OCR output to users. `OcrPageResult::full_text()` sorts regions top-to-bottom then left-to-right and joins with newlines.
+The `arcane ocr run` command uses `extract_text_ocr()` to expose full OCR output to users. `OcrPageResult::full_text()` sorts regions top-to-bottom then left-to-right and joins with newlines.
+
+#### OCR Worker (`src/pdf/worker.rs`)
+
+The worker provides cross-process OCR engine reuse, so model loading is amortized across commands:
+
+- `arcane ocr start` spawns `arcane worker-serve` in the background
+- Worker binds a loopback TCP socket and writes `~/Arcane/ocr-worker.json`
+- Client calls (`extract_text_ocr`, `extract_headings_ocr`) send length-prefixed JSON requests
+- `arcane ocr stop` sends a graceful stop request
+- `arcane ocr status` reports PID/port/uptime/request count
+- `arcane ocr init` performs warm-up validation (start + health-check + stop)
 
 **Model path resolution** (env var → `~/Arcane/models/` → `models/` CWD-relative):
 - `pp-ocrv5_mobile_det.onnx` — detection (language-agnostic)
@@ -450,8 +472,9 @@ The `arcane ocr` command uses `extract_text_ocr()` to expose full OCR output to 
 Run `arcane init-ocr` to download everything. Override via env vars: `ARCANE_OCR_DET_MODEL`, `ARCANE_OCR_REC_MODEL`, `ARCANE_OCR_DICT`.
 
 **Performance optimizations:**
-- **Engine caching**: `OAROCR` is stored in a `OnceLock` — model loading happens once per process, not per invocation. `OAROCR` is `Send + Sync` (backed by `Vec<Mutex<Session>>` + `AtomicUsize`).
-- **Batched predict**: Pages are rendered in bulk, then fed to `predict()` in batches of 16 instead of one-at-a-time, reducing ONNX session overhead from N calls to ceil(N/16).
+- **Persistent worker reuse**: OCR model load is paid once per worker lifetime, not per CLI invocation.
+- **Engine caching**: `OAROCR` is stored in a `OnceLock` — model loading happens once per process. `OAROCR` is `Send + Sync` (backed by `Vec<Mutex<Session>>` + `AtomicUsize`).
+- **Chunked render+predict**: Pages are rendered and predicted in chunks of 16, avoiding large intermediate vectors and repeated `drain()` shifting.
 - **Platform-aware ORT**: `ORT_DYLIB_DEFAULT` resolves to `onnxruntime.dll` / `libonnxruntime.so` / `libonnxruntime.dylib` per platform.
 
 **Pipeline integration** (`pipeline.rs`):

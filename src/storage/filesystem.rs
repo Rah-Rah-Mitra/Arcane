@@ -97,6 +97,18 @@ pub(crate) fn dirs_home() -> Result<PathBuf> {
     anyhow::bail!("cannot determine home directory — neither HOME nor USERPROFILE is set")
 }
 
+/// Returns the path to `~/Arcane/ocr-worker.json` — the worker runtime
+/// state file written by the background worker on startup.
+pub fn worker_state_path() -> Result<PathBuf> {
+    Ok(arcane_root()?.join("ocr-worker.json"))
+}
+
+/// Returns the path to `~/Arcane/ocr-worker.log` — stdout/stderr of the
+/// background worker process.
+pub fn worker_log_path() -> Result<PathBuf> {
+    Ok(arcane_root()?.join("ocr-worker.log"))
+}
+
 // ---------------------------------------------------------------------------
 // Symlink helper
 // ---------------------------------------------------------------------------

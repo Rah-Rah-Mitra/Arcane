@@ -87,6 +87,12 @@ To install Arcane so you can use it from anywhere:
 cargo install --path .
 ```
 
+To install with OCR support enabled:
+
+```bash
+cargo install --path . --force --features ocr
+```
+
 This will install the `arcane` command in your Cargo bin directory (usually `~/.cargo/bin/`), which should be in your PATH.
 
 ### Verifying Installation
@@ -639,9 +645,11 @@ If you don't have a reference PDF, you can create a JSON seed file manually:
 
 Then use `--seed-file seeds.json` instead of `--seed-pdf`. Pages are 1-based (matching `arcane outline` display). The `depth` field is optional and defaults to 1.
 
-### `arcane ocr <file> --pages <RANGE> [--dpi N] [--json]`
+### `arcane ocr run <file> --pages <RANGE> [--dpi N] [--json]`
 
 Runs OCR on a page range of any PDF and outputs the recognised text. Requires a build with OCR support (`--features ocr`) and models downloaded via `arcane init-ocr`.
+
+If a persistent worker is running (`arcane ocr start`), requests reuse the preloaded models for lower latency. If no worker is running, Arcane auto-starts a temporary worker for the command and stops it when done.
 
 **Options:**
 - `--pages RANGE`: Page range to OCR (1-based, e.g. "1-5" or "14-20") — **required**
@@ -652,17 +660,17 @@ Runs OCR on a page range of any PDF and outputs the recognised text. Requires a 
 
 Read the table of contents from a scanned book:
 ```bash
-arcane ocr ~/Books/scanned-book.pdf --pages "5-8"
+arcane ocr run ~/Books/scanned-book.pdf --pages "5-8"
 ```
 
 Extract text from specific pages at higher resolution:
 ```bash
-arcane ocr ~/Books/textbook.pdf --pages "14-20" --dpi 300
+arcane ocr run ~/Books/textbook.pdf --pages "14-20" --dpi 300
 ```
 
 Get structured OCR output for scripting:
 ```bash
-arcane ocr ~/Books/textbook.pdf --pages "1-3" --json
+arcane ocr run ~/Books/textbook.pdf --pages "1-3" --json
 ```
 
 **Human-readable output:**
@@ -695,8 +703,50 @@ Contents
 
 **Tips:**
 - Use 150 DPI (the default) for speed; increase to 200–300 DPI for small or dense text
-- Pipe `--json` output to `jq` for filtering: `arcane ocr book.pdf --pages "1-3" --json | jq '.[].regions[].text'`
+- Pipe `--json` output to `jq` for filtering: `arcane ocr run book.pdf --pages "1-3" --json | jq '.[].regions[].text'`
+- For repeated OCR-heavy workflows, run `arcane ocr start` first and stop with `arcane ocr stop` when done
 - Combine with `recover-outline --seed-file` to manually build an outline from OCR'd TOC pages
+
+### `arcane ocr init`
+
+Warms and validates OCR runtime by starting a worker, checking that models/runtime load successfully, then stopping it.
+
+```bash
+arcane ocr init
+```
+
+### `arcane ocr start [--idle-timeout-secs N]`
+
+Starts a persistent OCR worker process in the background. Use this when running many OCR commands to avoid repeated model-load overhead.
+
+```bash
+arcane ocr start
+arcane ocr start --idle-timeout-secs 900
+```
+
+### `arcane ocr status`
+
+Shows whether the worker is running, plus PID, port, uptime, and request count.
+
+```bash
+arcane ocr status
+```
+
+### `arcane ocr stop`
+
+Stops the persistent OCR worker gracefully.
+
+```bash
+arcane ocr stop
+```
+
+### `arcane ocr restart [--idle-timeout-secs N]`
+
+Stops the current worker (if running) and starts a new one.
+
+```bash
+arcane ocr restart
+```
 
 ### `arcane init-ocr [--models-dir DIR] [--skip-runtime] [--force]`
 
@@ -918,7 +968,7 @@ Arcane includes a full pipeline for analysing and recovering the structure of PD
 ```
 arcane probe book.pdf                  # Step 1: Is it text-based or scanned?
 arcane detect-layout book.pdf          # Step 2: What headings / font distribution does it have?
-arcane ocr book.pdf --pages "5-8"      # Step 2 alt: Read pages via OCR (for scanned/garbled PDFs)
+arcane ocr run book.pdf --pages "5-8"  # Step 2 alt: Read pages via OCR (for scanned/garbled PDFs)
 arcane sync-pages book.pdf             # Step 3: Find the physical↔printed page offset (RANSAC)
 arcane find-offset book.pdf            # Step 3 alt: Simpler offset detection (PageLabels / TOC)
 arcane recover-outline book.pdf        # Step 4: Inject recovered bookmarks into the PDF
@@ -983,7 +1033,7 @@ When there is no reference copy, you can OCR the table-of-contents pages and man
 
 ```bash
 # OCR the TOC pages (requires --features ocr build + arcane init-ocr)
-arcane ocr ~/Books/textbook.pdf --pages "5-8"
+arcane ocr run ~/Books/textbook.pdf --pages "5-8"
 
 # From the OCR output, create a JSON seed file with the chapter titles and pages:
 # seeds.json:

@@ -358,25 +358,12 @@ pub enum Commands {
         force: bool,
     },
 
-    /// Run OCR on a page range and output the recognised text.
+    /// OCR operations — run OCR on PDF pages or manage the background OCR worker.
     ///
     /// Requires `cargo build --features ocr` and `arcane init-ocr`.
-    /// Renders pages via pdfium, runs PaddleOCR, and prints the text.
     Ocr {
-        /// Path to the PDF file.
-        file: PathBuf,
-
-        /// Page range to OCR (1-based, e.g. "1-5" or "14-20").
-        #[arg(long)]
-        pages: String,
-
-        /// Render DPI (higher = more accurate but slower).
-        #[arg(long, default_value_t = 150)]
-        dpi: u32,
-
-        /// Output as JSON (includes coordinates and confidence scores).
-        #[arg(long)]
-        json: bool,
+        #[command(subcommand)]
+        cmd: OcrCommand,
     },
 
     /// Correlate detected chapter headings with TOC entries to find the
@@ -400,5 +387,70 @@ pub enum Commands {
         /// Output as JSON.
         #[arg(long)]
         json: bool,
+    },
+
+    /// Internal: run the OCR worker server loop (not intended for direct use).
+    #[command(hide = true)]
+    WorkerServe {
+        /// Seconds of inactivity before the worker shuts itself down.
+        #[arg(long)]
+        idle_timeout_secs: Option<u64>,
+    },
+}
+
+/// OCR sub-commands, invoked as `arcane ocr <sub-command>`.
+#[derive(Subcommand)]
+pub enum OcrCommand {
+    /// Initialise OCR runtime by validating models and warming the worker.
+    ///
+    /// If no worker is running, this command starts one, verifies it is
+    /// responsive, and stops it immediately.
+    Init,
+
+    /// Run OCR on a page range and output the recognised text.
+    ///
+    /// If a persistent OCR worker is running (`arcane ocr start`), the
+    /// request is routed to it so the ~5 s model-load cost is only paid once.
+    /// Requires `cargo build --features ocr` and `arcane init-ocr`.
+    Run {
+        /// Path to the PDF file.
+        file: PathBuf,
+
+        /// Page range to OCR (1-based, e.g. "1-5" or "14-20").
+        #[arg(long)]
+        pages: String,
+
+        /// Render DPI (higher = more accurate but slower).
+        #[arg(long, default_value_t = 150)]
+        dpi: u32,
+
+        /// Output as JSON (includes coordinates and confidence scores).
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Start the persistent OCR worker in the background.
+    ///
+    /// Loads ONNX Runtime and PaddleOCR models once, then serves requests
+    /// from `arcane ocr run` and pipeline commands (e.g. `recover-outline`)
+    /// via a TCP loopback socket — eliminating the ~5 s model-load overhead
+    /// on every call.  Requires `cargo build --features ocr` and `arcane init-ocr`.
+    Start {
+        /// Shut the worker down automatically after N seconds of inactivity.
+        #[arg(long)]
+        idle_timeout_secs: Option<u64>,
+    },
+
+    /// Stop the running OCR worker gracefully.
+    Stop,
+
+    /// Show the status of the OCR worker (running state, PID, port, uptime).
+    Status,
+
+    /// Restart the OCR worker (stops if running, then starts fresh).
+    Restart {
+        /// Shut the worker down automatically after N seconds of inactivity.
+        #[arg(long)]
+        idle_timeout_secs: Option<u64>,
     },
 }
