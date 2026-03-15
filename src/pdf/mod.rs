@@ -3,11 +3,16 @@
 //! Contains the chunking logic, outline/bookmark extraction, PageLabel
 //! resolution, structural operations, text extraction, and helpers.
 
+pub mod clustering;
 pub mod engine;
 pub mod heuristics;
+pub mod layout;
+pub mod offset;
 pub mod ops;
 pub mod outlines;
 pub mod page_labels;
+pub mod pipeline;
+pub mod probe;
 pub mod text;
 pub mod writer;
 

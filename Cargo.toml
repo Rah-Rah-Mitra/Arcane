@@ -48,6 +48,9 @@ crossterm = "0.28"
 # File watching
 notify = "7"
 
+# Fuzzy string matching (Levenshtein, Jaro-Winkler)
+strsim = "0.11"
+
 # Utilities
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }

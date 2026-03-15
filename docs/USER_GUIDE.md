@@ -328,40 +328,149 @@ Page labels:
   Page 19 — Content (arabic)
 ```
 
+### `arcane probe <file> [--json]`
+
+Classifies a PDF as text-based, scanned (image-only), or mixed. Inspects every page's content stream for text-showing operators vs image XObjects.
+
+**Options:**
+- `--json`: Output the full result as JSON (including per-page breakdown)
+
+**Example:**
+```bash
+arcane probe ~/Books/textbook.pdf
+```
+
+**Output:**
+```
+File:         /home/user/Books/textbook.pdf
+Pages:        420
+Type:         Text-Based
+Text pages:   420
+Image pages:  0
+Has outlines: no
+Page labels:  yes
+```
+
+This is the first step in understanding whether a PDF needs outline recovery, OCR, or is already well-structured.
+
+### `arcane detect-layout <file> [--json]`
+
+Extracts positioned text from every page using the PDF text-matrix state machine, clusters font sizes, and identifies structural anchors: chapter headings, section headings, TOC entries, and page numbers.
+
+**Options:**
+- `--json`: Output the full result as JSON (anchors, font clusters)
+- `--pages RANGE`: Only analyse specific pages (0-based range, e.g. "0-5")
+
+**Example:**
+```bash
+arcane detect-layout ~/Books/textbook.pdf --json
+```
+
+**Output (human-readable):**
+```
+File:           /home/user/Books/textbook.pdf
+Pages:          420
+Body font size: 10.0pt
+
+Font clusters:
+  24.0pt       150 chars  Heading1
+  14.0pt       800 chars  Heading2
+  10.0pt    250000 chars  Body
+   8.0pt      5000 chars  Footnote
+
+Structural anchors (42):
+  page    3  y= 650.0  ChapterHeading     24  Introduction
+  page    3  y= 580.0  SectionHeading     14  1.1 Background
+  ...
+```
+
+### `arcane find-offset <file> [--toc-pages <range>] [--json]`
+
+Calculates the integer delta between printed page numbers and physical PDF page indices. For example, if the printed "page 1" starts at physical page 19, the offset is +18.
+
+Uses three strategies in priority order:
+1. `/PageLabels` number tree (fastest, most reliable when present)
+2. TOC matching — fuzzy-matches TOC-entry titles against page text at candidate offsets
+3. Page-number detection — finds printed numbers in headers/footers and uses consensus
+
+**Options:**
+- `--toc-pages START-END`: TOC page range (1-based, e.g. "3-5") for targeted matching
+- `--json`: Output as JSON
+
+**Example:**
+```bash
+arcane find-offset ~/Books/textbook.pdf
+arcane find-offset ~/Books/textbook.pdf --toc-pages 7-12
+```
+
+**Output:**
+```
+File:       /home/user/Books/textbook.pdf
+Offset:     +18
+Confidence: 95%
+Method:     PageLabels
+
+Evidence:
+  physical page   18 → printed page    1  (PageLabels: Arabic numbering starts at physical page 18)
+```
+
 ### `arcane recover-outline <file> [options]`
 
-Re-hydrates the outline (bookmarks) of a PDF that has no `/Outlines` and no `/PageLabels` by analysing font sizes in the content streams. Useful for LaTeX-generated textbooks whose metadata was stripped.
+Recovers and injects outline bookmarks into PDFs that have no `/Outlines`, using a tiered pipeline:
+
+1. **Probe** — classify the document (text-based or scanned)
+2. **Cluster** — group font sizes using Jenks natural-breaks to identify heading levels
+3. **Extract** — detect headings via position-aware text analysis with (x, y) coordinates
+4. **Offset** — calculate the front-matter page delta
+5. **Verify** — fuzzy-match each heading against the text on its target page
+6. **Inject** — write a hierarchical `/Outlines` tree (Chapter > Section nesting)
 
 **Options:**
 - `--output PATH`: Write the fixed PDF to a new file instead of overwriting the input
 - `--dry-run`: Preview detected headings without writing anything
-- `--min-font-ratio R`: Font-size multiplier above body text to classify as a heading (default: 1.2 = 20 % larger)
+- `--min-font-ratio R`: Font-size multiplier above body text to classify as a heading (default: 1.2)
 - `--depth N`: Maximum heading depth to inject (1 = chapter-level only, 2 = chapters + sections; default: 2)
+- `--toc-pages START-END`: TOC page range (1-based, e.g. "7-12") for deterministic matching — bypasses TOC discovery and speeds up the process by ~40%
+- `--no-inject`: Run the full pipeline but skip injection (useful with `--json` for inspection)
+- `--fuzzy-threshold T`: Minimum similarity (0.0–1.0) for heading verification (default: 0.6)
+- `--json`: Output the full pipeline result as JSON (probe, layout, offset, headings, verification)
 
 **Workflow:**
 ```bash
-# 1. Confirm the PDF has no outlines
-arcane outline "book.pdf"
+# 1. Classify the PDF
+arcane probe "book.pdf"
 
-# 2. Preview detected headings (adjust --min-font-ratio if needed)
+# 2. Preview detected headings and verification results
 arcane recover-outline "book.pdf" --dry-run
 
-# 3. Generate a fixed copy with injected bookmarks
+# 3. If too many headings, raise the ratio; if too few, lower it
+arcane recover-outline "book.pdf" --dry-run --min-font-ratio 1.4
+
+# 4. For deterministic results, specify the TOC pages
+arcane recover-outline "book.pdf" --dry-run --toc-pages 7-12
+
+# 5. Generate a fixed copy with injected bookmarks
 arcane recover-outline "book.pdf" --output "book-recovered.pdf"
 
-# 4. Verify the injected outlines look correct
+# 6. Get full pipeline output as JSON for inspection
+arcane recover-outline "book.pdf" --no-inject --json
+
+# 7. Verify the injected outlines look correct
 arcane outline "book-recovered.pdf" --depth 3
 
-# 5. Replace the source in your project and re-chunk
+# 8. Replace the source in your project and re-chunk
 arcane remove "Project" "Book Title"
 arcane add    "Project" "book-recovered.pdf" --textbook --title "Book Title"
 arcane chunk  "Project" --source "Book Title" --depth 1
 ```
 
 **Tips:**
+- Use `arcane probe` first to confirm the PDF is text-based (scanned PDFs require OCR, which is planned for a future release)
 - Increase `--min-font-ratio` (e.g. to 1.4) if too many section headings are detected
 - Use `--depth 1` for chapter-level chunks only; `--depth 2` splits at section level too
+- The `--toc-pages` flag provides ~40% speedup and 100% deterministic matching when you know where the TOC is
 - LaTeX books (Computer Modern fonts: CMBX12, CMBX17) work particularly well
+- Use `--json` to pipe results into other tools or scripts
 
 ### `arcane remove <project> [source]`
 
@@ -545,7 +654,7 @@ This will:
 
 **Possible causes:**
 
-1. **The PDF doesn't have chapter metadata**: Some PDFs don't have bookmarks or page labels. Use `arcane outline <file>` to check. Try using the `--start-page` option to help Arcane map pages correctly.
+1. **The PDF doesn't have chapter metadata**: Some PDFs don't have bookmarks or page labels. Use `arcane outline <file>` to check. If there are no outlines, use `arcane recover-outline` to reconstruct them from font-size analysis.
 
 2. **The source wasn't marked as a textbook**: Make sure you used the `--textbook` flag when adding the source.
 
@@ -553,10 +662,19 @@ This will:
 
 4. **Outline depth too shallow**: The PDF may have chapters at a deeper outline level. Try `--depth 2` or `--depth 3`.
 
+5. **The PDF is a scanned image**: Use `arcane probe <file>` to check. If the PDF is scanned (image-only), the current version cannot extract text from it. OCR support is planned for a future release.
+
 **Solution:**
 ```bash
-# Inspect the PDF's outline first
+# Classify the PDF first
+arcane probe ~/path/to/book.pdf
+
+# Inspect the PDF's outline
 arcane outline ~/path/to/book.pdf --depth 3
+
+# If no outlines exist, recover them
+arcane recover-outline ~/path/to/book.pdf --dry-run
+arcane recover-outline ~/path/to/book.pdf --output ~/path/to/book-fixed.pdf
 
 # Preview what chapters will be detected
 arcane chunk "Project" --dry-run --depth 2

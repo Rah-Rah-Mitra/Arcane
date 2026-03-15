@@ -31,6 +31,10 @@ pub struct HeadingCandidate {
     pub font_size: f32,
     /// Accumulated text of the heading on that page.
     pub text: String,
+    /// Y coordinate on the page (if position-aware extraction was used).
+    pub y_position: Option<f32>,
+    /// Heading depth level: 1 = chapter, 2 = section, etc.
+    pub depth_level: u32,
 }
 
 // ---------------------------------------------------------------------------
@@ -172,6 +176,8 @@ pub fn extract_headings(
                     page_index: page,
                     font_size: *acc_size,
                     text,
+                    y_position: None,
+                    depth_level: 1,
                 });
             }
             *acc_text = String::new();
@@ -421,12 +427,181 @@ pub fn inject_outlines(
     Ok(n)
 }
 
+/// Inject a hierarchical `/Outlines` tree with parent-child nesting.
+///
+/// `entries` is a list of `(page_index, title, depth_level)` where
+/// `depth_level` 1 = top-level, 2 = child of preceding level-1, etc.
+///
+/// Returns the number of outline entries written.
+pub fn inject_hierarchical_outlines(
+    doc: &mut Document,
+    entries: &[(u32, String, u32)],
+) -> Result<usize> {
+    if entries.is_empty() {
+        anyhow::bail!("no entries to inject");
+    }
+
+    // Build page map: 0-based physical index → ObjectId.
+    let page_oid_map: BTreeMap<u32, ObjectId> = doc
+        .get_pages()
+        .into_iter()
+        .map(|(page_num, oid)| (page_num.saturating_sub(1), oid))
+        .collect();
+
+    // Filter to entries that have valid page references.
+    let valid_entries: Vec<&(u32, String, u32)> = entries
+        .iter()
+        .filter(|(page_idx, _, _)| page_oid_map.contains_key(page_idx))
+        .collect();
+
+    if valid_entries.is_empty() {
+        anyhow::bail!("none of the entries reference valid pages");
+    }
+
+    // Check if all entries are depth 1 — fall back to flat injection.
+    let max_depth = valid_entries.iter().map(|(_, _, d)| *d).max().unwrap_or(1);
+    if max_depth <= 1 {
+        // Use flat injection for simplicity.
+        let flat_map: BTreeMap<u32, String> = valid_entries
+            .iter()
+            .map(|(p, t, _)| (*p, t.clone()))
+            .collect();
+        return inject_outlines(doc, &flat_map);
+    }
+
+    let placeholder = Object::Reference((0, 0));
+    let n = valid_entries.len();
+
+    // Create all outline item objects.
+    let ids: Vec<(ObjectId, u32)> = valid_entries
+        .iter()
+        .map(|(page_idx, title, depth)| {
+            let page_oid = page_oid_map[page_idx];
+            let dest = Object::Array(vec![
+                Object::Reference(page_oid),
+                Object::Name(b"XYZ".to_vec()),
+                Object::Null,
+                Object::Null,
+                Object::Null,
+            ]);
+            let mut d = Dictionary::new();
+            d.set("Title", Object::string_literal(title.as_str()));
+            d.set("Parent", placeholder.clone());
+            d.set("Dest", dest);
+            let id = doc.add_object(Object::Dictionary(d));
+            (id, *depth)
+        })
+        .collect();
+
+    // Create root outlines dictionary.
+    let mut root_dict = Dictionary::new();
+    root_dict.set("Type", Object::Name(b"Outlines".to_vec()));
+    let root_id = doc.add_object(Object::Dictionary(root_dict));
+
+    // Build the tree structure.
+    // Strategy: iterate through entries. For each entry at depth D:
+    //   - Parent is the most recent entry at depth D-1 (or root if D=1).
+    //   - Sibling linking: Prev/Next among entries sharing the same parent.
+    let mut parent_stack: Vec<(ObjectId, Vec<ObjectId>)> = vec![(root_id, vec![])];
+
+    for i in 0..n {
+        let (item_id, depth) = ids[i];
+        let depth = depth as usize;
+
+        // Pop the stack until we're at the right parent level.
+        while parent_stack.len() > depth {
+            // Finalize the children of the popped parent.
+            let (parent_id, children) = parent_stack.pop().unwrap();
+            finalize_children(doc, parent_id, &children);
+        }
+
+        // Extend the stack if needed (should be at depth - 1 entries now).
+        // The current parent is the top of the stack.
+        let parent_id = parent_stack.last().unwrap().0;
+
+        // Set this item's parent.
+        if let Ok(Object::Dictionary(d)) = doc.get_object_mut(item_id) {
+            d.set("Parent", Object::Reference(parent_id));
+        }
+
+        // Add to parent's children list.
+        parent_stack.last_mut().unwrap().1.push(item_id);
+
+        // Push this item as a potential parent for deeper entries.
+        parent_stack.push((item_id, vec![]));
+    }
+
+    // Finalize remaining stack.
+    while let Some((parent_id, children)) = parent_stack.pop() {
+        finalize_children(doc, parent_id, &children);
+    }
+
+    // Compute total count and set on root.
+    if let Ok(Object::Dictionary(d)) = doc.get_object_mut(root_id) {
+        // Find top-level children (depth == 1).
+        let top_level: Vec<ObjectId> = ids
+            .iter()
+            .filter(|(_, depth)| *depth == 1)
+            .map(|(id, _)| *id)
+            .collect();
+        if let Some(&first) = top_level.first() {
+            d.set("First", Object::Reference(first));
+        }
+        if let Some(&last) = top_level.last() {
+            d.set("Last", Object::Reference(last));
+        }
+        d.set("Count", Object::Integer(n as i64));
+    }
+
+    // Attach to catalog.
+    let catalog_id = doc
+        .trailer
+        .get(b"Root")
+        .context("PDF has no /Root in trailer")?
+        .as_reference()
+        .context("PDF /Root is not a reference")?;
+
+    if let Ok(Object::Dictionary(catalog)) = doc.get_object_mut(catalog_id) {
+        catalog.set("Outlines", Object::Reference(root_id));
+    }
+
+    Ok(n)
+}
+
+/// Set `/First`, `/Last`, `/Prev`, `/Next` on a parent's children.
+fn finalize_children(doc: &mut Document, parent_id: ObjectId, children: &[ObjectId]) {
+    if children.is_empty() {
+        return;
+    }
+
+    let n = children.len();
+
+    // Set Prev/Next links.
+    for i in 0..n {
+        if let Ok(Object::Dictionary(d)) = doc.get_object_mut(children[i]) {
+            if i > 0 {
+                d.set("Prev", Object::Reference(children[i - 1]));
+            }
+            if i < n - 1 {
+                d.set("Next", Object::Reference(children[i + 1]));
+            }
+        }
+    }
+
+    // Set First/Last/Count on parent.
+    if let Ok(Object::Dictionary(d)) = doc.get_object_mut(parent_id) {
+        d.set("First", Object::Reference(children[0]));
+        d.set("Last", Object::Reference(children[n - 1]));
+        d.set("Count", Object::Integer(n as i64));
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 /// Extract decompressed content bytes from all `/Contents` streams of a page.
-fn get_page_content_bytes(doc: &Document, page_oid: ObjectId) -> Option<Vec<u8>> {
+pub(crate) fn get_page_content_bytes(doc: &Document, page_oid: ObjectId) -> Option<Vec<u8>> {
     let page_obj = doc.get_object(page_oid).ok()?;
     let page_dict = page_obj.as_dict().ok()?;
 
@@ -463,7 +638,7 @@ fn get_page_content_bytes(doc: &Document, page_oid: ObjectId) -> Option<Vec<u8>>
 }
 
 /// Convert a PDF String object to a Rust `String` (best-effort UTF-8).
-fn pdf_obj_to_string(obj: &Object) -> String {
+pub(crate) fn pdf_obj_to_string(obj: &Object) -> String {
     match obj {
         Object::String(bytes, _) => {
             // Handle UTF-16-BE BOM.
@@ -490,7 +665,7 @@ fn pdf_obj_text_len(obj: &Object) -> u64 {
 }
 
 /// Extract a numeric value from a lopdf `Object` that may be Real or Integer.
-fn obj_as_f32(obj: &Object) -> Option<f32> {
+pub(crate) fn obj_as_f32(obj: &Object) -> Option<f32> {
     match obj {
         Object::Real(f) => Some(*f),
         Object::Integer(i) => Some(*i as f32),
@@ -534,16 +709,22 @@ mod tests {
                 page_index: 0,
                 font_size: 14.0,
                 text: "Section 1".into(),
+                y_position: None,
+                depth_level: 2,
             },
             HeadingCandidate {
                 page_index: 0,
                 font_size: 18.0,
                 text: "Chapter 1".into(),
+                y_position: None,
+                depth_level: 1,
             },
             HeadingCandidate {
                 page_index: 5,
                 font_size: 18.0,
                 text: "Chapter 2".into(),
+                y_position: None,
+                depth_level: 1,
             },
         ];
         let map = headings_to_chapter_map(&headings);

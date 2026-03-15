@@ -494,58 +494,292 @@ pub fn cmd_recover_outline(
     dry_run: bool,
     min_font_ratio: f64,
     depth: u32,
+    toc_pages: Option<String>,
+    no_inject: bool,
+    fuzzy_threshold: f64,
+    json: bool,
 ) -> Result<()> {
-    use crate::pdf::heuristics;
-    use lopdf::Document;
+    use crate::pdf::pipeline::{self, RecoveryConfig};
 
-    let doc = Document::load(&file)
+    let mut doc = lopdf::Document::load(&file)
         .with_context(|| format!("failed to open PDF at {}", file.display()))?;
 
-    // Build headings.
-    let headings =
-        heuristics::extract_headings(&doc, min_font_ratio as f32, depth);
+    let toc_range = toc_pages.as_deref().and_then(|s| parse_page_range(s));
 
-    if headings.is_empty() {
+    let config = RecoveryConfig {
+        min_font_ratio: min_font_ratio as f32,
+        max_depth: depth,
+        toc_pages: toc_range,
+        dry_run,
+        inject: !no_inject,
+        fuzzy_threshold,
+    };
+
+    let result = pipeline::recover_outline(&mut doc, &file.display().to_string(), &config)
+        .context("outline recovery pipeline failed")?;
+
+    // JSON output.
+    if json {
         println!(
-            "[arcane] No headings detected in '{}'. Try a lower --min-font-ratio.",
-            file.display()
+            "{}",
+            serde_json::to_string_pretty(&result)
+                .context("failed to serialise recovery result")?
+        );
+
+        // Still save if injection happened.
+        if result.injected_count.is_some() {
+            let out_path = output.unwrap_or_else(|| file.clone());
+            doc.save(&out_path)
+                .with_context(|| format!("failed to save PDF to {}", out_path.display()))?;
+            eprintln!("[arcane] Saved → {}", out_path.display());
+        }
+
+        return Ok(());
+    }
+
+    // Human-readable output.
+    println!("File: {}", file.display());
+    println!("Type: {}", result.probe.document_kind);
+
+    if result.chapter_map.is_empty() {
+        if result.probe.document_kind == crate::pdf::probe::DocumentKind::Scanned {
+            println!("[arcane] Scanned PDF detected — OCR support not yet available.");
+            println!("         Outline recovery for scanned documents is planned for a future release.");
+        } else {
+            println!(
+                "[arcane] No headings detected. Try a lower --min-font-ratio or provide --toc-pages."
+            );
+        }
+        return Ok(());
+    }
+
+    // Print offset if available.
+    if let Some(ref offset) = result.offset {
+        println!(
+            "Offset: {:+} (method: {:?}, confidence: {:.0}%)",
+            offset.offset,
+            offset.method,
+            offset.confidence * 100.0
+        );
+    }
+
+    // Print detected headings.
+    println!("\nDetected {} heading(s):\n", result.chapter_map.len());
+    println!("  {:<6} {:<8} Title", "Page", "Depth");
+    println!("  {}", "\u{2500}".repeat(66));
+    for h in &result.headings {
+        let depth_label = match h.depth_level {
+            1 => "Ch",
+            2 => "  Sec",
+            3 => "    Sub",
+            _ => "      ?",
+        };
+        println!(
+            "  {:<6} {:<8} {}",
+            h.page_index + 1,
+            depth_label,
+            h.text
+        );
+    }
+
+    // Print verification summary.
+    let verified_count = result.verification.iter().filter(|v| v.verified).count();
+    let total = result.verification.len();
+    if total > 0 {
+        println!(
+            "\nVerification: {}/{} headings confirmed on target pages.",
+            verified_count, total
+        );
+    }
+
+    if dry_run {
+        println!("\n[arcane] Dry-run — no file written.");
+        return Ok(());
+    }
+
+    // Save if injection happened.
+    if let Some(count) = result.injected_count {
+        let out_path = output.unwrap_or_else(|| file.clone());
+        doc.save(&out_path)
+            .with_context(|| format!("failed to save PDF to {}", out_path.display()))?;
+        println!(
+            "\n[arcane] Injected {count} outline entries → {}",
+            out_path.display()
+        );
+        println!("[arcane] You can now re-chunk with: arcane chunk <project> --source \"<title>\" --force");
+    } else if no_inject {
+        println!("\n[arcane] --no-inject specified — no file written.");
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Probe command
+// ---------------------------------------------------------------------------
+
+pub fn cmd_probe(file: std::path::PathBuf, json: bool) -> Result<()> {
+    use crate::pdf::probe;
+
+    let doc = lopdf::Document::load(&file)
+        .with_context(|| format!("failed to open PDF at {}", file.display()))?;
+
+    let result = probe::probe(&doc, &file.display().to_string());
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&result).context("failed to serialise probe result")?
         );
         return Ok(());
     }
 
-    let chapter_map = heuristics::headings_to_chapter_map(&headings);
+    // Human-readable output.
+    println!("File:         {}", result.path);
+    println!("Pages:        {}", result.total_pages);
+    println!("Type:         {}", result.document_kind);
+    println!("Text pages:   {}", result.text_page_count);
+    println!("Image pages:  {}", result.image_page_count);
+    println!("Has outlines: {}", if result.has_outlines { "yes" } else { "no" });
+    println!("Page labels:  {}", if result.has_page_labels { "yes" } else { "no" });
 
-    // Print the detected headings table.
-    println!("File: {}", file.display());
-    println!("Detected {} heading(s):\n", chapter_map.len());
-    println!("  {:<6} Title", "Page");
-    println!("  {}", "\u{2500}".repeat(66));
-    for (page_idx, title) in &chapter_map {
-        println!("  {:<6} {}", page_idx + 1, title);
+    if result.total_pages <= 30 {
+        println!("\nPer-page breakdown:");
+        for (i, kind) in result.page_kinds.iter().enumerate() {
+            println!("  page {:>4}  {}", i + 1, kind);
+        }
     }
-    println!();
 
-    if dry_run {
-        println!("[arcane] Dry-run — no file written.");
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Find-offset command
+// ---------------------------------------------------------------------------
+
+pub fn cmd_find_offset(
+    file: std::path::PathBuf,
+    toc_pages: Option<String>,
+    json: bool,
+) -> Result<()> {
+    use crate::pdf::offset;
+
+    let doc = lopdf::Document::load(&file)
+        .with_context(|| format!("failed to open PDF at {}", file.display()))?;
+
+    // Parse optional --toc-pages "start-end" (1-based) → 0-based inclusive range.
+    let toc_range = toc_pages
+        .as_deref()
+        .and_then(|s| parse_page_range(s));
+
+    let result = offset::calculate_offset(&doc, None, toc_range);
+
+    match result {
+        Some(ref r) if json => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(r)
+                    .context("failed to serialise offset result")?
+            );
+        }
+        Some(ref r) => {
+            println!("File:       {}", file.display());
+            println!("Offset:     {:+}", r.offset);
+            println!("Confidence: {:.0}%", r.confidence * 100.0);
+            println!("Method:     {:?}", r.method);
+            if !r.evidence.is_empty() {
+                println!("\nEvidence:");
+                for e in &r.evidence {
+                    println!(
+                        "  physical page {:>4} → printed page {:>4}  ({})",
+                        e.physical_page, e.logical_number, e.matched_text
+                    );
+                }
+            }
+        }
+        None => {
+            if json {
+                println!("null");
+            } else {
+                println!("[arcane] Could not determine page offset for '{}'.", file.display());
+                println!("         Try providing --toc-pages <start>-<end> (1-based).");
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Parse a "start-end" range string (1-based) into a 0-based inclusive tuple.
+fn parse_page_range(s: &str) -> Option<(u32, u32)> {
+    let parts: Vec<&str> = s.split('-').collect();
+    if parts.len() == 2 {
+        let start: u32 = parts[0].trim().parse().ok()?;
+        let end: u32 = parts[1].trim().parse().ok()?;
+        if start >= 1 && end >= start {
+            return Some((start - 1, end - 1)); // convert to 0-based
+        }
+    } else if parts.len() == 1 {
+        let page: u32 = parts[0].trim().parse().ok()?;
+        if page >= 1 {
+            return Some((page - 1, page - 1));
+        }
+    }
+    None
+}
+
+// ---------------------------------------------------------------------------
+// Detect-layout command
+// ---------------------------------------------------------------------------
+
+pub fn cmd_detect_layout(
+    file: std::path::PathBuf,
+    json: bool,
+    _pages: Option<String>,
+) -> Result<()> {
+    use crate::pdf::layout;
+
+    let doc = lopdf::Document::load(&file)
+        .with_context(|| format!("failed to open PDF at {}", file.display()))?;
+
+    let result = layout::analyze_layout(&doc, &file.display().to_string());
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&result)
+                .context("failed to serialise layout result")?
+        );
         return Ok(());
     }
 
-    // Inject outlines.
-    let out_path = output.unwrap_or_else(|| file.clone());
-    let mut doc = Document::load(&file)
-        .with_context(|| format!("failed to re-open PDF at {}", file.display()))?;
+    // Human-readable summary.
+    println!("File:           {}", result.path);
+    println!("Pages:          {}", result.total_pages);
+    println!("Body font size: {:.1}pt", result.body_font_size);
+    println!("\nFont clusters:");
+    for fc in &result.font_clusters {
+        println!(
+            "  {:.1}pt  {:>8} chars  {:?}",
+            fc.centroid, fc.char_count, fc.role
+        );
+    }
 
-    let n = heuristics::inject_outlines(&mut doc, &chapter_map)
-        .context("failed to inject outlines")?;
-
-    doc.save(&out_path)
-        .with_context(|| format!("failed to save PDF to {}", out_path.display()))?;
-
-    println!(
-        "[arcane] Injected {n} outline entries → {}",
-        out_path.display()
-    );
-    println!("[arcane] You can now re-chunk with: arcane chunk <project> --source \"<title>\" --force");
+    if result.anchors.is_empty() {
+        println!("\nNo structural anchors detected.");
+    } else {
+        println!("\nStructural anchors ({}):", result.anchors.len());
+        for a in &result.anchors {
+            println!(
+                "  page {:>4}  y={:>6.1}  {:<18}  {:.0}  {}",
+                a.page_index + 1,
+                a.y,
+                format!("{:?}", a.kind),
+                a.font_size,
+                a.text
+            );
+        }
+    }
 
     Ok(())
 }

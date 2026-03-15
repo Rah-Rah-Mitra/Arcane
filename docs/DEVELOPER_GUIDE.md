@@ -57,6 +57,12 @@ src/
 ├── pdf/
 │   ├── mod.rs              # Module exports
 │   ├── engine.rs           # Core chunking engine (boundary detection + parallel writing)
+│   ├── heuristics.rs       # Font-size heuristics, heading extraction, outline injection
+│   ├── probe.rs            # PDF classification (text-based vs scanned vs mixed)
+│   ├── clustering.rs       # Jenks natural-breaks 1D font-size clustering
+│   ├── layout.rs           # Position-aware text extraction (text-matrix state machine)
+│   ├── offset.rs           # Logical-to-physical page offset calculation
+│   ├── pipeline.rs         # Outline recovery pipeline orchestrator
 │   ├── outlines.rs         # /Outlines (bookmarks) extraction with depth support
 │   ├── page_labels.rs      # /PageLabels parsing and resolution
 │   ├── text.rs             # Text extraction from PDF pages
@@ -91,11 +97,12 @@ src/
 - `lopdf` (0.39.0) - PDF manipulation without quality loss
 - `rayon` (1.10) - Parallel chunk writing
 - `tantivy` (0.22) - Full-text search engine
-- `rusqlite` (0.32) - SQLite database
-- `clap` (4) - CLI argument parsing with derive macros
+- `rusqlite` (0.33) - SQLite database
+- `clap` (4.5) - CLI argument parsing with derive macros
 - `serde` (1.0) + `serde_json` (1.0) - Serialization
 - `anyhow` (1.0) + `thiserror` (2) - Error handling
 - `blake3` (1) - Content-addressed hashing
+- `strsim` (0.11) - Fuzzy string matching (Levenshtein, Jaro-Winkler) for outline verification
 - `chrono` (0.4) - Timestamps
 - `uuid` (1) - Unique IDs
 - `tracing` + `tracing-subscriber` - Structured logging
@@ -122,6 +129,10 @@ The CLI layer uses `clap` derive macros for declarative command definitions in `
 - `cmd_remove()`: Removes a source or entire project (cascading cleanup)
 - `cmd_list_chunks()`: Lists chunk files for a source
 - `cmd_outline()`: Displays PDF outline tree and page labels
+- `cmd_probe()`: Classifies a PDF as text-based, scanned, or mixed
+- `cmd_detect_layout()`: Detects structural anchors (headings, TOC entries, page numbers)
+- `cmd_find_offset()`: Calculates logical-to-physical page offset
+- `cmd_recover_outline()`: Full outline recovery pipeline (probe → cluster → extract → offset → verify → inject)
 - `cmd_reindex()`: Rebuilds the search index
 - `cmd_tag()` / `cmd_untag()`: Tag management
 - `cmd_merge()` / `cmd_split()` / `cmd_rotate()`: Structural PDF operations
@@ -228,11 +239,47 @@ offset = physical_index - logical_page_number
 - **`write_chunk(doc, start, end, path)`** (`engine.rs`): BFS-based minimal page extraction
 - **`sanitise_filename(name)`** (`engine.rs`): Clean chapter titles for filenames
 
+#### Outline Recovery Pipeline
+
+When a PDF has no `/Outlines` bookmarks, the `recover-outline` command runs a modular pipeline to reconstruct them:
+
+```
+pipeline.rs (orchestrator)
+    │
+    ├── probe.rs         — Classify pages as Text/Image/Mixed/Empty
+    ├── clustering.rs    — Jenks natural-breaks on font-size histogram
+    ├── layout.rs        — Text-matrix state machine for (x, y) extraction
+    │       │
+    │       └── Detects: ChapterHeading, SectionHeading, TocEntry, PageNumber
+    ├── offset.rs        — Logical-to-physical page delta
+    │       │
+    │       ├── Strategy 1: /PageLabels number tree
+    │       ├── Strategy 2: TOC matching (fuzzy, via strsim)
+    │       └── Strategy 3: Header/footer page-number consensus
+    └── heuristics.rs    — Heading extraction + outline injection
+            │
+            ├── inject_outlines()                — Flat /Outlines tree
+            └── inject_hierarchical_outlines()   — Nested Chapter > Section tree
+```
+
+**Key types:**
+- `ProbeResult` — document classification with per-page breakdown
+- `FontCluster` / `FontRole` — clustered font sizes with semantic roles (Body, Heading1, Heading2, Footnote)
+- `PositionedText` — text run with (x, y, font_size) from the text-matrix state machine
+- `LayoutAnchor` / `AnchorKind` — structural element detected by position + font analysis
+- `OffsetResult` / `OffsetMethod` — page offset with confidence score and evidence chain
+- `RecoveryConfig` — pipeline configuration (min_font_ratio, depth, toc_pages, fuzzy_threshold)
+- `RecoveryResult` — full pipeline output (probe, layout, offset, headings, verification, injection count)
+
+The pipeline is designed so each module can be used independently via CLI sub-commands (`probe`, `detect-layout`, `find-offset`) or composed together for the full `recover-outline` flow.
+
 #### Performance
 
 - **BFS object traversal**: `write_chunk` only copies objects reachable from target pages (not the full document)
 - **`rayon` parallel writes**: Each chunk is written on a separate thread
 - **Page map built once**: `oid_to_page` map avoids O(N × P) per-entry lookups
+- **Detection-only passes**: `probe` and `detect-layout` read content streams without modifying the document
+- **Selective processing**: `--toc-pages` flag skips TOC discovery and targets specific pages directly
 
 #### Idempotency
 
@@ -365,12 +412,18 @@ cargo test test_name
 
 ### Test Structure
 
-Tests are organized as inline `#[cfg(test)]` modules at the end of each source file. Current test suite: **46 tests**.
+Tests are organized as inline `#[cfg(test)]` modules at the end of each source file. Current test suite: **79 tests**.
 
 Key test areas:
 - `models/project.rs`: Project operations
 - `models/source.rs`: Source metadata serialization, build_source dispatch
 - `pdf/engine.rs`: Boundary calculation, filename sanitization, idempotency
+- `pdf/heuristics.rs`: Font-size histogram, heading extraction, chapter map deduplication
+- `pdf/probe.rs`: Page classification (text/image/empty), document-level probe, per-page counts
+- `pdf/clustering.rs`: Jenks clustering, role assignment (body/heading/footnote), edge cases
+- `pdf/layout.rs`: Text-matrix tracking, TOC entry patterns, page-number detection, anchor detection
+- `pdf/offset.rs`: TOC line parsing, fuzzy similarity, page-number consensus, range filtering
+- `pdf/pipeline.rs`: Heading merging, chapter map building, line similarity, HeadingInfo conversion
 - `pdf/page_labels.rs`: Roman numeral conversion, label resolution
 - `pdf/ops.rs`: Input validation for merge, split, rotate, encrypt
 - `search/indexer.rs`: Index creation, page indexing
@@ -439,30 +492,165 @@ Bad:
 
 ### Planned Features
 
-1. **YouTube Integration** (src/models/source.rs — `youtube()` trait method)
+1. **OCR Support for Scanned PDFs** (Tier 2 Outline Recovery)
+   - See [OCR Integration Plan](#ocr-integration-plan) below for full details
+   - Extract text from scanned/image-only PDFs
+   - Make scanned textbooks searchable and chunkable
+
+2. **YouTube Integration** (src/models/source.rs — `youtube()` trait method)
    - Extract transcripts from lecture videos
    - Link video timestamps to textbook sections
    - Store as markdown with video embeds
 
-2. **CAS Garbage Collection** (`gc` command)
+3. **CAS Garbage Collection** (`gc` command)
    - Find orphaned blobs not referenced by any source
    - Reclaim disk space after source/project removal
 
-3. **Integrity Checking** (`doctor` command)
+4. **Integrity Checking** (`doctor` command)
    - Verify every DB source has its filesystem counterpart
    - Re-hash CAS blobs to detect corruption
 
-4. **Export Functionality**
+5. **Export Functionality**
    - Export project metadata and PDFs to a portable directory
    - Bundle for sharing or migration
 
-5. **GUI Interface**
+6. **GUI Interface**
    - Tauri-based GUI with visual project organization
    - PDF preview in app
 
-6. **OCR Support**
-   - Extract text from scanned PDFs
-   - Make scanned textbooks searchable
+### OCR Integration Plan
+
+The outline recovery pipeline currently handles text-based PDFs (Tier 1). For scanned PDFs, `arcane probe` reports `Scanned (Image-Only)` and the pipeline gracefully reports that OCR is required. This section describes the planned Tier 2 implementation.
+
+#### Architecture
+
+OCR will be an **optional feature flag** to keep the default build zero-C-dependency:
+
+```toml
+[features]
+default = []
+ocr = ["dep:ocrs", "dep:image", "dep:pdfium-render"]
+
+[dependencies.ocrs]
+version = "0.11"
+optional = true
+
+[dependencies.image]
+version = "0.25"
+optional = true
+
+[dependencies.pdfium-render]
+version = "0.8"
+optional = true
+features = ["image"]
+```
+
+Build with OCR support:
+```bash
+cargo build --release --features ocr
+```
+
+#### Crate Selection
+
+| Crate | Role | Why |
+|-------|------|-----|
+| **`ocrs`** (v0.11) | OCR engine | Pure-Rust ONNX inference via RTen. Returns word-level bounding boxes with text. No C dependencies. Latin alphabet support sufficient for English TOC entries. |
+| **`rten`** | ONNX runtime | Transitive dependency via `ocrs`. Pure Rust. |
+| **`image`** (v0.25) | Image buffers | Standard `ImageBuffer` types for OCR input. |
+| **`pdfium-render`** (v0.8) | PDF → image | Renders PDF pages to raster images for OCR input. Uses Google's PDFium via FFI — the only C dependency, accepted because native PDF rasterisation has no pure-Rust equivalent. |
+
+Alternatives considered and rejected:
+- **`ocr-rs`**: Uses PaddleOCR via MNN inference framework. Viable but less mature than `ocrs` in the Rust ecosystem.
+- **`tesseract-rs`**: Wraps Tesseract via C FFI. Heavier dependency chain, requires system-level Tesseract installation.
+
+#### Module Design
+
+A new `src/pdf/ocr.rs` module behind `#[cfg(feature = "ocr")]`:
+
+```rust
+/// Render a single PDF page to an image at the given DPI.
+#[cfg(feature = "ocr")]
+pub fn render_page_to_image(path: &Path, page_index: u32, dpi: u32) -> Result<DynamicImage>;
+
+/// Run OCR on a rendered page image, returning text with bounding boxes.
+#[cfg(feature = "ocr")]
+pub fn ocr_page(image: &DynamicImage) -> Result<Vec<OcrTextBlock>>;
+
+/// Selectively OCR only the TOC pages and page-corner regions.
+/// Returns positioned text suitable for the layout/offset pipeline.
+#[cfg(feature = "ocr")]
+pub fn ocr_toc_pages(
+    path: &Path,
+    toc_pages: (u32, u32),
+    corner_pages: &[u32],
+) -> Result<Vec<PositionedText>>;
+```
+
+```rust
+/// A block of text recognized by OCR with its bounding box.
+pub struct OcrTextBlock {
+    pub text: String,
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub confidence: f32,
+}
+```
+
+#### Pipeline Integration
+
+The `pipeline.rs` orchestrator will route scanned PDFs through Tier 2:
+
+```
+probe() → DocumentKind::Scanned
+    │
+    ├── If --toc-pages provided:
+    │       ocr_toc_pages(path, toc_range, sample_pages)
+    │       → PositionedText (same type as Tier 1)
+    │       → offset::parse_toc_entries() + offset::calculate_offset()
+    │       → inject outlines
+    │
+    └── If no --toc-pages:
+            1. Render first 20 pages at 150 DPI
+            2. Run OCR detection-only pass (bounding boxes, no recognition)
+            3. Use layout heuristics (text density, centering, font height)
+               to identify candidate TOC pages
+            4. OCR only those candidate pages + page corners
+            5. Continue with offset → verify → inject
+```
+
+**Key design decisions:**
+- **Selective OCR**: Never OCR the entire document. Only process TOC pages and page-corner regions (for page-number detection). This keeps the operation fast even for 1000+ page textbooks.
+- **Detection-only first pass**: Use `ocrs` detection model (bounding boxes without text recognition) to find text-dense regions. This is ~5x faster than full recognition and sufficient for identifying TOC page candidates.
+- **Quantized models**: Use FP16 ONNX models for ~2x inference speedup with minimal accuracy loss on printed text.
+- **`--toc-pages` bypass**: When the user provides `--toc-pages`, skip all discovery and target those pages directly. This is the fastest and most reliable path.
+
+#### Boldness Estimation for Scanned Headings
+
+For scanned PDFs, font-size information isn't available from content streams. Instead, heading detection will use the `imageproc` crate for:
+
+1. **Stroke width estimation**: Measure the average stroke width of text in bounding boxes. Bold text has wider strokes.
+2. **Height-based size classification**: Use the bounding box height as a proxy for font size. Cluster these heights using the same Jenks algorithm from `clustering.rs`.
+3. **Centering heuristics**: Text centered on the page (x-position near page midpoint) with large bounding boxes is likely a heading.
+
+This would require adding `imageproc` as an optional dependency under the `ocr` feature flag.
+
+#### Error Handling
+
+A new `OcrError` variant will be added to `PdfError` in `src/error.rs`:
+
+```rust
+#[cfg(feature = "ocr")]
+#[error("OCR error: {0}")]
+Ocr(String),
+```
+
+When OCR is not compiled in (`default` features), `pipeline.rs` returns a clear message:
+```
+[arcane] Scanned PDF detected — OCR support not available.
+         Rebuild with: cargo build --release --features ocr
+```
 
 ### Contributing to Roadmap
 

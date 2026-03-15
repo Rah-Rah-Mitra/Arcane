@@ -70,7 +70,21 @@ fn main() -> anyhow::Result<()> {
             dry_run,
             min_font_ratio,
             depth,
-        } => commands::cmd_recover_outline(file, output, dry_run, min_font_ratio, depth),
+            toc_pages,
+            no_inject,
+            fuzzy_threshold,
+            json,
+        } => commands::cmd_recover_outline(
+            file,
+            output,
+            dry_run,
+            min_font_ratio,
+            depth,
+            toc_pages,
+            no_inject,
+            fuzzy_threshold,
+            json,
+        ),
         Commands::Outline { file, depth } => commands::cmd_outline(file, depth),
         Commands::Remove { project, source } => commands::cmd_remove(&project, source.as_deref()),
         Commands::Merge { output, inputs } => commands::cmd_merge(output, inputs),
@@ -96,6 +110,15 @@ fn main() -> anyhow::Result<()> {
         Commands::Reindex => commands::cmd_reindex(),
         Commands::Tui => commands::cmd_tui(),
         Commands::Watch { project } => commands::cmd_watch(&project),
+        Commands::Probe { file, json } => commands::cmd_probe(file, json),
+        Commands::DetectLayout { file, json, pages } => {
+            commands::cmd_detect_layout(file, json, pages)
+        }
+        Commands::FindOffset {
+            file,
+            toc_pages,
+            json,
+        } => commands::cmd_find_offset(file, toc_pages, json),
         Commands::Protect {
             input,
             password,

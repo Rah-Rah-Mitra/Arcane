@@ -7,6 +7,9 @@ A local-first research archival application for organizing academic materials. A
 - **Project-Based Organization**: Group related sources under named projects with optional tags
 - **Smart PDF Chunking**: Automatically split textbooks into individual chapter files
 - **Multi-Level Chapter Detection**: Extracts chapter boundaries from PDF bookmarks/outlines with configurable depth (sub-chapters, sections)
+- **Outline Recovery Pipeline**: Reconstruct missing bookmarks using font-size clustering, position-aware analysis, and fuzzy verification — then inject them back as functional PDF outlines
+- **PDF Classification**: Instantly determine whether a PDF is text-based, scanned, or mixed
+- **Page Offset Detection**: Automatically calculate the front-matter delta between printed and physical page numbers
 - **Physical/Logical Page Mapping**: Correctly handles front-matter with Roman numerals
 - **Deduplication**: Content-addressed storage (CAS) — adding the same file twice is a no-op
 - **Full-Text Search**: tantivy-powered search across all indexed sources, with project and source filters
@@ -75,6 +78,10 @@ When you run `chunk`, Arcane tries three strategies in order:
 2. **Page Labels** (`/PageLabels`) — fallback when no usable bookmarks exist.
 3. **Whole-document fallback** — treats the entire PDF as one chunk.
 
+If a PDF has no bookmarks at all, use `arcane recover-outline` to reconstruct them
+before chunking. You can also use `arcane probe` to classify a PDF and
+`arcane detect-layout` to inspect its structural anchors.
+
 Use `arcane outline <file>` to inspect a PDF's outline tree and page labels before chunking.
 Use `arcane chunk <project> --dry-run` to preview detected boundaries without writing files.
 
@@ -109,7 +116,10 @@ Chapter PDFs are written to `~/Arcane/Library/<Project>/Chunks/<Source>/`.
 | `arcane tag <project> <tag>` | Add a tag to a project |
 | `arcane untag <project> <tag>` | Remove a tag |
 | `arcane outline <file> [--depth N]` | Show PDF outline tree and page labels |
-| `arcane recover-outline <file> [--output F] [--dry-run] [--min-font-ratio R] [--depth N]` | Re-hydrate outlines via font-size heuristics (for PDFs with no bookmarks) |
+| `arcane probe <file> [--json]` | Classify PDF as text-based, scanned, or mixed |
+| `arcane detect-layout <file> [--json]` | Detect structural anchors (headings, TOC entries, page numbers) |
+| `arcane find-offset <file> [--toc-pages R] [--json]` | Calculate logical-to-physical page offset |
+| `arcane recover-outline <file> [options]` | Recover and inject outline bookmarks (full pipeline) |
 | `arcane remove <project> [source]` | Remove a source or entire project |
 | `arcane merge <output> <inputs…>` | Merge multiple PDFs into one |
 | `arcane split <input> <ranges…> [--output-dir D]` | Split a PDF by page ranges |

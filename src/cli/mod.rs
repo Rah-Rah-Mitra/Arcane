@@ -182,6 +182,41 @@ pub enum Commands {
         source: Option<String>,
     },
 
+    /// Detect layout structure and output structural anchors as JSON.
+    ///
+    /// Extracts positioned text from every page, clusters font sizes, and
+    /// identifies headings, TOC entries, and page numbers by spatial analysis.
+    DetectLayout {
+        /// Path to the PDF file.
+        file: PathBuf,
+
+        /// Output as JSON (default; human-readable summary if omitted).
+        #[arg(long)]
+        json: bool,
+
+        /// Only analyse specific pages (0-based range, e.g. "0-5").
+        #[arg(long)]
+        pages: Option<String>,
+    },
+
+    /// Calculate the logical-to-physical page offset for a PDF.
+    ///
+    /// Determines the integer delta between printed page numbers and PDF page
+    /// indices.  For example, if the printed "page 1" starts at physical page
+    /// 19 in the PDF, the offset is +18.
+    FindOffset {
+        /// Path to the PDF file.
+        file: PathBuf,
+
+        /// TOC page range (1-based, e.g. "3-5") to parse for page references.
+        #[arg(long)]
+        toc_pages: Option<String>,
+
+        /// Output as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Recover PDF outline bookmarks using font-size heuristics.
     ///
     /// Useful for PDFs that have no /Outlines and no /PageLabels (e.g. LaTeX
@@ -207,6 +242,23 @@ pub enum Commands {
         /// Maximum heading depth to inject (1 = chapter-level only, 2 = chapters + sections).
         #[arg(long, default_value_t = 2)]
         depth: u32,
+
+        /// TOC page range (1-based, e.g. "3-5") for targeted heading extraction.
+        #[arg(long)]
+        toc_pages: Option<String>,
+
+        /// Skip outline injection (preview only, like --dry-run but still runs
+        /// the full pipeline for JSON output).
+        #[arg(long)]
+        no_inject: bool,
+
+        /// Minimum fuzzy-match similarity (0.0–1.0) for heading verification.
+        #[arg(long, default_value_t = 0.6)]
+        fuzzy_threshold: f64,
+
+        /// Output the full pipeline result as JSON.
+        #[arg(long)]
+        json: bool,
     },
 
     /// Show the outline (bookmarks) and page labels of a PDF file.
@@ -226,6 +278,19 @@ pub enum Commands {
 
         /// Source title to remove. If omitted, removes the entire project.
         source: Option<String>,
+    },
+
+    /// Classify a PDF as text-based or scanned (image-only).
+    ///
+    /// Inspects every page for text-showing vs image-placing operators and
+    /// reports the overall document type plus per-page breakdown.
+    Probe {
+        /// Path to the PDF file.
+        file: PathBuf,
+
+        /// Output as JSON instead of a human-readable table.
+        #[arg(long)]
+        json: bool,
     },
 
     /// Encrypt a PDF with a password.
