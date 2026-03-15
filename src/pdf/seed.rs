@@ -130,8 +130,12 @@ pub fn load_seeds_from_json(path: &Path) -> Result<Vec<SeedEntry>> {
 pub fn load_seeds_from_pdf(ref_path: &Path, max_depth: u32) -> Result<Vec<SeedEntry>> {
     let doc = Document::load(ref_path)
         .with_context(|| format!("cannot open reference PDF {}", ref_path.display()))?;
-    let entries = extract_chapters_with_depth_and_level(&doc, max_depth)
-        .with_context(|| format!("reference PDF has no usable /Outlines: {}", ref_path.display()))?;
+    let entries = extract_chapters_with_depth_and_level(&doc, max_depth).with_context(|| {
+        format!(
+            "reference PDF has no usable /Outlines: {}",
+            ref_path.display()
+        )
+    })?;
     Ok(entries
         .into_iter()
         .map(|(ref_page, title, depth_level)| SeedEntry {
@@ -194,10 +198,7 @@ pub fn calculate_offset_from_seeds(
     }
 
     // Find the winning offset.
-    let (best_idx, &best_votes) = votes
-        .iter()
-        .enumerate()
-        .max_by_key(|(_, v)| *v)?;
+    let (best_idx, &best_votes) = votes.iter().enumerate().max_by_key(|(_, v)| *v)?;
 
     if best_votes < 2 {
         return None; // inconclusive

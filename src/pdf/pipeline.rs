@@ -288,9 +288,7 @@ pub fn recover_outline_seeded(
             (off, Some(result))
         }
         None => {
-            tracing::warn!(
-                "Seed offset vote was inconclusive — trying standard offset detection"
-            );
+            tracing::warn!("Seed offset vote was inconclusive — trying standard offset detection");
             let fallback = offset::calculate_offset(doc, None, config.toc_pages);
             // If the standard detection is very low-confidence (< 30%), default to
             // offset 0 rather than risking a wildly wrong value that pushes most
@@ -337,7 +335,13 @@ pub fn recover_outline_seeded(
     )
     .unwrap_or_else(|e| {
         tracing::warn!("Seed OCR verification failed ({e:#}), falling back to text extraction");
-        seed::resolve_seeds(&seeds, offset, doc, config.fuzzy_threshold, config.page_shift_tolerance)
+        seed::resolve_seeds(
+            &seeds,
+            offset,
+            doc,
+            config.fuzzy_threshold,
+            config.page_shift_tolerance,
+        )
     });
 
     #[cfg(not(feature = "ocr"))]

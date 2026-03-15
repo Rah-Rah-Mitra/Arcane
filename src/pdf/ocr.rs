@@ -187,7 +187,11 @@ impl OcrPageResult {
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then_with(|| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal))
         });
-        sorted.iter().map(|r| r.text.as_str()).collect::<Vec<_>>().join("\n")
+        sorted
+            .iter()
+            .map(|r| r.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 }
 
@@ -306,11 +310,7 @@ pub fn extract_headings_ocr(
 ///
 /// Unlike [`extract_headings_ocr`], this does not filter by bounding-box height
 /// — every region with confidence ≥ 0.4 is returned.
-pub fn extract_text_ocr(
-    path: &Path,
-    page_indices: &[u32],
-    dpi: u32,
-) -> Result<Vec<OcrPageResult>> {
+pub fn extract_text_ocr(path: &Path, page_indices: &[u32], dpi: u32) -> Result<Vec<OcrPageResult>> {
     if page_indices.is_empty() {
         return Ok(Vec::new());
     }

@@ -516,13 +516,19 @@ pub fn cmd_recover_outline(
         (Some(ref_path), None) => {
             let entries = seed::load_seeds_from_pdf(&ref_path, depth)
                 .with_context(|| format!("failed to load seeds from {}", ref_path.display()))?;
-            println!("[arcane] Loaded {} seed entries from reference PDF.", entries.len());
+            println!(
+                "[arcane] Loaded {} seed entries from reference PDF.",
+                entries.len()
+            );
             Some(entries)
         }
         (None, Some(json_path)) => {
             let entries = seed::load_seeds_from_json(&json_path)
                 .with_context(|| format!("failed to load seed file {}", json_path.display()))?;
-            println!("[arcane] Loaded {} seed entries from JSON file.", entries.len());
+            println!(
+                "[arcane] Loaded {} seed entries from JSON file.",
+                entries.len()
+            );
             Some(entries)
         }
         (Some(_), Some(_)) => {
@@ -1489,12 +1495,7 @@ pub fn cmd_sync_pages(
 // ocr — run OCR on a page range and output the recognised text
 // ---------------------------------------------------------------------------
 
-pub fn cmd_ocr(
-    file: PathBuf,
-    pages: String,
-    dpi: u32,
-    json: bool,
-) -> Result<()> {
+pub fn cmd_ocr(file: PathBuf, pages: String, dpi: u32, json: bool) -> Result<()> {
     #[cfg(not(feature = "ocr"))]
     {
         let _ = (&file, &pages, dpi, json);
