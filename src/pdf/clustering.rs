@@ -15,12 +15,9 @@ use serde::{Deserialize, Serialize};
 
 /// A raw cluster produced by the natural-breaks algorithm.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct Cluster {
     /// Representative (centroid) font size for this cluster.
     pub centroid: f32,
-    /// Members: `(font_size, char_count)`.
-    pub members: Vec<(f32, u64)>,
     /// Total characters in this cluster.
     pub total_chars: u64,
 }
@@ -314,7 +311,6 @@ fn make_cluster(members: &[(f32, u64)]) -> Cluster {
 
     Cluster {
         centroid,
-        members: members.to_vec(),
         total_chars,
     }
 }
@@ -366,17 +362,14 @@ mod tests {
         let clusters = vec![
             Cluster {
                 centroid: 18.0,
-                members: vec![(18.0, 200)],
                 total_chars: 200,
             },
             Cluster {
                 centroid: 12.0,
-                members: vec![(12.0, 50_000)],
                 total_chars: 50_000,
             },
             Cluster {
                 centroid: 8.0,
-                members: vec![(8.0, 1_000)],
                 total_chars: 1_000,
             },
         ];

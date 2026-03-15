@@ -23,6 +23,7 @@ use lopdf::{Dictionary, Document, Object, ObjectId, Stream};
 // ---------------------------------------------------------------------------
 
 /// A heading found by font-size analysis.
+#[cfg(test)]
 #[derive(Debug, Clone)]
 pub struct HeadingCandidate {
     /// 0-based physical page index.
@@ -31,10 +32,6 @@ pub struct HeadingCandidate {
     pub font_size: f32,
     /// Accumulated text of the heading on that page.
     pub text: String,
-    /// Y coordinate on the page (if position-aware extraction was used).
-    pub y_position: Option<f32>,
-    /// Heading depth level: 1 = chapter, 2 = section, etc.
-    pub depth_level: u32,
 }
 
 // ---------------------------------------------------------------------------
@@ -136,195 +133,11 @@ pub fn dominant_body_size(histogram: &BTreeMap<u16, u64>) -> Option<f32> {
 // Phase 2: heading extraction
 // ---------------------------------------------------------------------------
 
-/// Extract heading candidates from the document using font-size heuristics.
-///
-/// `min_ratio` — font sizes ≥ `body_size × min_ratio` are considered headings.
-/// `max_depth` — generate candidates for up to this many heading levels
-///   (level 1 = largest; level 2 = slightly smaller, etc.).
-pub fn extract_headings(doc: &Document, min_ratio: f32, max_depth: u32) -> Vec<HeadingCandidate> {
-    let histogram = match build_font_histogram(doc) {
-        Some(h) => h,
-        None => return vec![],
-    };
-    let body_size = match dominant_body_size(&histogram) {
-        Some(s) => s,
-        None => return vec![],
-    };
-
-    tracing::debug!(
-        body_size,
-        threshold = body_size * min_ratio,
-        "Heading extraction thresholds"
-    );
-
-    // Build size thresholds for each depth level.
-    // depth-1 threshold = body × min_ratio
-    // depth-2 threshold = body × (min_ratio × 0.85)   (a bit smaller)
-    // depth-N threshold = body × (min_ratio × 0.85^(N-1))
-    let thresholds: Vec<f32> = (1..=max_depth)
-        .map(|d| body_size * min_ratio * 0.85_f32.powi(d as i32 - 1))
-        .collect();
-
-    // Minimum threshold across all depths — anything below this is body text.
-    let min_threshold = thresholds.last().copied().unwrap_or(body_size * min_ratio);
-
-    let pages = doc.get_pages();
-    let mut candidates: Vec<HeadingCandidate> = Vec::new();
-
-    // Accumulator for the current heading being built.
-    let mut acc_page: Option<u32> = None;
-    let mut acc_size: f32 = 0.0;
-    let mut acc_text = String::new();
-
-    let flush = |acc_page: &mut Option<u32>,
-                 acc_size: &mut f32,
-                 acc_text: &mut String,
-                 candidates: &mut Vec<HeadingCandidate>| {
-        if let Some(page) = acc_page.take() {
-            let text = acc_text.split_whitespace().collect::<Vec<_>>().join(" ");
-            if !text.is_empty() {
-                candidates.push(HeadingCandidate {
-                    page_index: page,
-                    font_size: *acc_size,
-                    text,
-                    y_position: None,
-                    depth_level: 1,
-                });
-            }
-            *acc_text = String::new();
-            *acc_size = 0.0;
-        }
-    };
-
-    for (page_num, page_oid) in &pages {
-        let physical_page = page_num.saturating_sub(1); // 0-based
-
-        let bytes = match get_page_content_bytes(doc, *page_oid) {
-            Some(b) if !b.is_empty() => b,
-            _ => continue,
-        };
-        let content = match lopdf::content::Content::decode(&bytes) {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
-
-        let mut current_nominal: f32 = 12.0; // raw Tf size
-        let mut tm_scale: f32 = 1.0; // √(a²+b²) from Tm operator
-                                     // Effective size (recomputed whenever Tf or Tm changes).
-        let mut current_size: f32 = current_nominal * tm_scale;
-
-        for op in &content.operations {
-            match op.operator.as_str() {
-                "BT" => {
-                    tm_scale = 1.0;
-                    current_size = current_nominal * tm_scale;
-                }
-                "Tm" => {
-                    if op.operands.len() >= 6 {
-                        let a = obj_as_f32(&op.operands[0]).unwrap_or(1.0);
-                        let b = obj_as_f32(&op.operands[1]).unwrap_or(0.0);
-                        tm_scale = (a * a + b * b).sqrt().max(0.001);
-                        current_size = current_nominal * tm_scale;
-                    }
-                }
-                "Tf" => {
-                    if let Some(size_obj) = op.operands.get(1) {
-                        if let Some(size) = obj_as_f32(size_obj) {
-                            current_nominal = size;
-                            current_size = current_nominal * tm_scale;
-                        }
-                    }
-                }
-                "Tj" | "'" => {
-                    if current_size >= min_threshold {
-                        if let Some(text_obj) = op.operands.first() {
-                            let text = pdf_obj_to_string(text_obj);
-                            if !text.trim().is_empty() {
-                                // Flush if switching page or significantly different size.
-                                if acc_page != Some(physical_page)
-                                    || (acc_size - current_size).abs() > 0.5
-                                {
-                                    flush(
-                                        &mut acc_page,
-                                        &mut acc_size,
-                                        &mut acc_text,
-                                        &mut candidates,
-                                    );
-                                }
-                                acc_page = Some(physical_page);
-                                acc_size = current_size;
-                                acc_text.push_str(&text);
-                                acc_text.push(' ');
-                            }
-                        }
-                    } else {
-                        // Body-text operator — flush any pending heading.
-                        flush(&mut acc_page, &mut acc_size, &mut acc_text, &mut candidates);
-                    }
-                }
-                "TJ" => {
-                    if current_size >= min_threshold {
-                        if let Some(Object::Array(arr)) = op.operands.first() {
-                            let text: String = arr
-                                .iter()
-                                .filter_map(|o| match o {
-                                    Object::String(_, _) => Some(pdf_obj_to_string(o)),
-                                    _ => None,
-                                })
-                                .collect();
-                            if !text.trim().is_empty() {
-                                if acc_page != Some(physical_page)
-                                    || (acc_size - current_size).abs() > 0.5
-                                {
-                                    flush(
-                                        &mut acc_page,
-                                        &mut acc_size,
-                                        &mut acc_text,
-                                        &mut candidates,
-                                    );
-                                }
-                                acc_page = Some(physical_page);
-                                acc_size = current_size;
-                                acc_text.push_str(&text);
-                                acc_text.push(' ');
-                            }
-                        }
-                    } else {
-                        flush(&mut acc_page, &mut acc_size, &mut acc_text, &mut candidates);
-                    }
-                }
-                // BT/ET reset context — flush on ET.
-                "ET" => {
-                    flush(&mut acc_page, &mut acc_size, &mut acc_text, &mut candidates);
-                }
-                _ => {}
-            }
-        }
-
-        // Flush at end of page.
-        flush(&mut acc_page, &mut acc_size, &mut acc_text, &mut candidates);
-    }
-
-    // Post-filter: only keep headings whose text looks like a chapter/section
-    // title and has a meaningful length.
-    candidates
-        .into_iter()
-        .filter(|c| {
-            let t = c.text.trim();
-            // Must be non-trivial (more than 1 character, not just a number).
-            t.len() > 1
-                && !t
-                    .chars()
-                    .all(|ch| ch.is_numeric() || ch == '.' || ch == ' ')
-        })
-        .collect()
-}
-
 /// Collapse `Vec<HeadingCandidate>` into a chapter map.
 ///
 /// When multiple candidates land on the same page, the largest-font one wins
 /// (main chapter heading beats a section heading on the same page).
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn headings_to_chapter_map(headings: &[HeadingCandidate]) -> BTreeMap<u32, String> {
     let mut map: BTreeMap<u32, HeadingCandidate> = BTreeMap::new();
     for h in headings {
@@ -433,174 +246,6 @@ pub fn inject_outlines(doc: &mut Document, chapters: &BTreeMap<u32, String>) -> 
     Ok(n)
 }
 
-/// Inject a hierarchical `/Outlines` tree with parent-child nesting.
-///
-/// `entries` is a list of `(page_index, title, depth_level)` where
-/// `depth_level` 1 = top-level, 2 = child of preceding level-1, etc.
-///
-/// Returns the number of outline entries written.
-pub fn inject_hierarchical_outlines(
-    doc: &mut Document,
-    entries: &[(u32, String, u32)],
-) -> Result<usize> {
-    if entries.is_empty() {
-        anyhow::bail!("no entries to inject");
-    }
-
-    // Build page map: 0-based physical index → ObjectId.
-    let page_oid_map: BTreeMap<u32, ObjectId> = doc
-        .get_pages()
-        .into_iter()
-        .map(|(page_num, oid)| (page_num.saturating_sub(1), oid))
-        .collect();
-
-    // Filter to entries that have valid page references.
-    let valid_entries: Vec<&(u32, String, u32)> = entries
-        .iter()
-        .filter(|(page_idx, _, _)| page_oid_map.contains_key(page_idx))
-        .collect();
-
-    if valid_entries.is_empty() {
-        anyhow::bail!("none of the entries reference valid pages");
-    }
-
-    // Check if all entries are depth 1 — fall back to flat injection.
-    let max_depth = valid_entries.iter().map(|(_, _, d)| *d).max().unwrap_or(1);
-    if max_depth <= 1 {
-        // Use flat injection for simplicity.
-        let flat_map: BTreeMap<u32, String> = valid_entries
-            .iter()
-            .map(|(p, t, _)| (*p, t.clone()))
-            .collect();
-        return inject_outlines(doc, &flat_map);
-    }
-
-    let placeholder = Object::Reference((0, 0));
-    let n = valid_entries.len();
-
-    // Create all outline item objects.
-    let ids: Vec<(ObjectId, u32)> = valid_entries
-        .iter()
-        .map(|(page_idx, title, depth)| {
-            let page_oid = page_oid_map[page_idx];
-            let dest = Object::Array(vec![
-                Object::Reference(page_oid),
-                Object::Name(b"XYZ".to_vec()),
-                Object::Null,
-                Object::Null,
-                Object::Null,
-            ]);
-            let mut d = Dictionary::new();
-            d.set("Title", Object::string_literal(title.as_str()));
-            d.set("Parent", placeholder.clone());
-            d.set("Dest", dest);
-            let id = doc.add_object(Object::Dictionary(d));
-            (id, *depth)
-        })
-        .collect();
-
-    // Create root outlines dictionary.
-    let mut root_dict = Dictionary::new();
-    root_dict.set("Type", Object::Name(b"Outlines".to_vec()));
-    let root_id = doc.add_object(Object::Dictionary(root_dict));
-
-    // Build the tree structure.
-    // Strategy: iterate through entries. For each entry at depth D:
-    //   - Parent is the most recent entry at depth D-1 (or root if D=1).
-    //   - Sibling linking: Prev/Next among entries sharing the same parent.
-    let mut parent_stack: Vec<(ObjectId, Vec<ObjectId>)> = vec![(root_id, vec![])];
-
-    for &(item_id, depth) in ids.iter().take(n) {
-        let depth = depth as usize;
-
-        // Pop the stack until we're at the right parent level.
-        while parent_stack.len() > depth {
-            // Finalize the children of the popped parent.
-            let (parent_id, children) = parent_stack.pop().unwrap();
-            finalize_children(doc, parent_id, &children);
-        }
-
-        // Extend the stack if needed (should be at depth - 1 entries now).
-        // The current parent is the top of the stack.
-        let parent_id = parent_stack.last().unwrap().0;
-
-        // Set this item's parent.
-        if let Ok(Object::Dictionary(d)) = doc.get_object_mut(item_id) {
-            d.set("Parent", Object::Reference(parent_id));
-        }
-
-        // Add to parent's children list.
-        parent_stack.last_mut().unwrap().1.push(item_id);
-
-        // Push this item as a potential parent for deeper entries.
-        parent_stack.push((item_id, vec![]));
-    }
-
-    // Finalize remaining stack.
-    while let Some((parent_id, children)) = parent_stack.pop() {
-        finalize_children(doc, parent_id, &children);
-    }
-
-    // Compute total count and set on root.
-    if let Ok(Object::Dictionary(d)) = doc.get_object_mut(root_id) {
-        // Find top-level children (depth == 1).
-        let top_level: Vec<ObjectId> = ids
-            .iter()
-            .filter(|(_, depth)| *depth == 1)
-            .map(|(id, _)| *id)
-            .collect();
-        if let Some(&first) = top_level.first() {
-            d.set("First", Object::Reference(first));
-        }
-        if let Some(&last) = top_level.last() {
-            d.set("Last", Object::Reference(last));
-        }
-        d.set("Count", Object::Integer(n as i64));
-    }
-
-    // Attach to catalog.
-    let catalog_id = doc
-        .trailer
-        .get(b"Root")
-        .context("PDF has no /Root in trailer")?
-        .as_reference()
-        .context("PDF /Root is not a reference")?;
-
-    if let Ok(Object::Dictionary(catalog)) = doc.get_object_mut(catalog_id) {
-        catalog.set("Outlines", Object::Reference(root_id));
-    }
-
-    Ok(n)
-}
-
-/// Set `/First`, `/Last`, `/Prev`, `/Next` on a parent's children.
-fn finalize_children(doc: &mut Document, parent_id: ObjectId, children: &[ObjectId]) {
-    if children.is_empty() {
-        return;
-    }
-
-    let n = children.len();
-
-    // Set Prev/Next links.
-    for i in 0..n {
-        if let Ok(Object::Dictionary(d)) = doc.get_object_mut(children[i]) {
-            if i > 0 {
-                d.set("Prev", Object::Reference(children[i - 1]));
-            }
-            if i < n - 1 {
-                d.set("Next", Object::Reference(children[i + 1]));
-            }
-        }
-    }
-
-    // Set First/Last/Count on parent.
-    if let Ok(Object::Dictionary(d)) = doc.get_object_mut(parent_id) {
-        d.set("First", Object::Reference(children[0]));
-        d.set("Last", Object::Reference(children[n - 1]));
-        d.set("Count", Object::Integer(n as i64));
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -681,7 +326,7 @@ fn float_to_key(size: f32) -> u16 {
 }
 
 /// Clean up a heading title for use as a chapter name.
-#[allow(dead_code)]
+#[cfg(test)]
 fn sanitise_heading_title(text: &str) -> String {
     // Collapse whitespace, trim, then apply filename-safe cleanup.
     let clean: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -712,22 +357,16 @@ mod tests {
                 page_index: 0,
                 font_size: 14.0,
                 text: "Section 1".into(),
-                y_position: None,
-                depth_level: 2,
             },
             HeadingCandidate {
                 page_index: 0,
                 font_size: 18.0,
                 text: "Chapter 1".into(),
-                y_position: None,
-                depth_level: 1,
             },
             HeadingCandidate {
                 page_index: 5,
                 font_size: 18.0,
                 text: "Chapter 2".into(),
-                y_position: None,
-                depth_level: 1,
             },
         ];
         let map = headings_to_chapter_map(&headings);

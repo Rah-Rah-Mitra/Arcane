@@ -24,16 +24,10 @@ pub fn classify_event(event: &notify::Event, project_name: &str) -> Vec<WatchEve
                 });
             }
             EventKind::Modify(_) => {
-                results.push(WatchEvent::Modified {
-                    project_name: project_name.to_string(),
-                    path: path.clone(),
-                });
+                results.push(WatchEvent::Modified { path: path.clone() });
             }
             EventKind::Remove(_) => {
-                results.push(WatchEvent::Removed {
-                    project_name: project_name.to_string(),
-                    path: path.clone(),
-                });
+                results.push(WatchEvent::Removed { path: path.clone() });
             }
             _ => {}
         }
@@ -104,9 +98,7 @@ mod tests {
         let results = classify_event(&event, "Proj");
         assert_eq!(results.len(), 1);
         match &results[0] {
-            WatchEvent::Removed { project_name, .. } => {
-                assert_eq!(project_name, "Proj");
-            }
+            WatchEvent::Removed { path } => assert_eq!(path, &PathBuf::from("/tmp/old.PDF")),
             _ => panic!("expected Removed event"),
         }
     }

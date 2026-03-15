@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, HashMap};
 use lopdf::{Document, Object, ObjectId};
 use serde::{Deserialize, Serialize};
 
-use super::clustering::{assign_roles, cluster_font_sizes, FontCluster, FontRole};
+use super::clustering::{assign_roles, cluster_font_sizes, FontCluster};
 use super::heuristics::{
     build_font_histogram, get_page_content_bytes, obj_as_f32, pdf_obj_to_string,
 };
@@ -140,12 +140,6 @@ pub struct TypographicProfile {
     pub size_stddev: f32,
     /// Mode of the font-size distribution — the body-text centroid.
     pub body_centroid: f32,
-    /// Mean y-gap between vertically adjacent text blocks (available for diagnostics).
-    #[allow(dead_code)]
-    pub gap_mean: f32,
-    /// Standard deviation of y-gaps (available for diagnostics).
-    #[allow(dead_code)]
-    pub gap_stddev: f32,
     /// 90th-percentile y-gap threshold (used for `FLAG_ISOLATED`).
     pub gap_p90: f32,
 }
@@ -156,8 +150,6 @@ impl Default for TypographicProfile {
             size_mean: 12.0,
             size_stddev: 2.0,
             body_centroid: 12.0,
-            gap_mean: 14.0,
-            gap_stddev: 8.0,
             gap_p90: 28.0,
         }
     }
@@ -463,31 +455,18 @@ pub fn build_typographic_profile(
         }
     }
 
-    let (gap_mean, gap_stddev, gap_p90) = if gaps.is_empty() {
-        (14.0_f32, 8.0_f32, 28.0_f32)
+    let gap_p90 = if gaps.is_empty() {
+        28.0_f32
     } else {
-        let gm = gaps.iter().copied().map(|v| v as f64).sum::<f64>() / gaps.len() as f64;
-        let gvar = gaps
-            .iter()
-            .map(|&v| {
-                let d = v as f64 - gm;
-                d * d
-            })
-            .sum::<f64>()
-            / gaps.len() as f64;
-        let gsd = gvar.sqrt() as f32;
         gaps.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         let p90_idx = ((gaps.len() as f32 * 0.90) as usize).min(gaps.len().saturating_sub(1));
-        let p90 = gaps[p90_idx];
-        (gm as f32, gsd, p90)
+        gaps[p90_idx]
     };
 
     TypographicProfile {
         size_mean,
         size_stddev,
         body_centroid,
-        gap_mean,
-        gap_stddev,
         gap_p90,
     }
 }
@@ -855,73 +834,6 @@ pub fn classify_features(
 ///
 /// This is the legacy path (no font descriptor or spatial data).  The full
 /// feature-vector pipeline is used by [`analyze_layout`].
-#[allow(dead_code)]
-pub fn detect_anchors(
-    positioned: &[PositionedText],
-    body_size: f32,
-    clusters: &[FontCluster],
-) -> Vec<LayoutAnchor> {
-    let mut anchors = Vec::new();
-
-    let role_for = |size: f32| -> Option<FontRole> {
-        clusters
-            .iter()
-            .min_by_key(|c| ((c.centroid - size).abs() * 100.0) as u32)
-            .map(|c| c.role)
-    };
-
-    for pt in positioned {
-        let role = role_for(pt.font_size);
-        let trimmed = pt.text.trim();
-
-        if role == Some(FontRole::Heading1) && trimmed.len() > 1 {
-            anchors.push(LayoutAnchor {
-                page_index: pt.page_index,
-                kind: AnchorKind::ChapterHeading,
-                text: trimmed.to_string(),
-                font_size: pt.font_size,
-                y: pt.y,
-                confidence: 0.9,
-            });
-            continue;
-        }
-        if role == Some(FontRole::Heading2) && trimmed.len() > 1 {
-            anchors.push(LayoutAnchor {
-                page_index: pt.page_index,
-                kind: AnchorKind::SectionHeading,
-                text: trimmed.to_string(),
-                font_size: pt.font_size,
-                y: pt.y,
-                confidence: 0.8,
-            });
-            continue;
-        }
-        if pt.font_size >= body_size * 1.1 && is_numbered_heading(trimmed) {
-            anchors.push(LayoutAnchor {
-                page_index: pt.page_index,
-                kind: AnchorKind::NumberedHeading,
-                text: trimmed.to_string(),
-                font_size: pt.font_size,
-                y: pt.y,
-                confidence: 0.85,
-            });
-            continue;
-        }
-        if is_toc_entry(trimmed) {
-            anchors.push(LayoutAnchor {
-                page_index: pt.page_index,
-                kind: AnchorKind::TocEntry,
-                text: trimmed.to_string(),
-                font_size: pt.font_size,
-                y: pt.y,
-                confidence: 0.7,
-            });
-        }
-    }
-
-    anchors
-}
-
 // ---------------------------------------------------------------------------
 // TOC / page-number helpers
 // ---------------------------------------------------------------------------
@@ -1081,25 +993,6 @@ fn is_toc_entry(text: &str) -> bool {
 // ---------------------------------------------------------------------------
 // Pixel-density stubs (Scanned Tier — deferred to OCR milestone)
 // ---------------------------------------------------------------------------
-
-/// (Stub) Estimate font weight from the black-pixel ratio in a bounding box.
-///
-/// Bold text: ratio ≈ 0.15–0.25; regular text: ≈ 0.08–0.12.
-/// Requires image data extracted from XObject streams.  Deferred to the
-/// OCR integration milestone.
-#[allow(dead_code)]
-pub fn estimate_weight_from_pixel_density(_image: &[u8], _bbox: (f32, f32, f32, f32)) -> u16 {
-    400
-}
-
-/// (Stub) Detect italic text via Horizontal Projection Profile.
-///
-/// Italic text produces a slanted "sawtooth" pattern in column-wise black
-/// pixel sums.  Deferred to the OCR integration milestone.
-#[allow(dead_code)]
-pub fn detect_italic_hpp(_image: &[u8], _bbox: (f32, f32, f32, f32)) -> bool {
-    false
-}
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -1274,8 +1167,6 @@ mod tests {
             size_mean: 10.0,
             size_stddev: 1.0,
             body_centroid: 10.0,
-            gap_mean: 14.0,
-            gap_stddev: 4.0,
             gap_p90: 28.0,
         };
         // z = 1.5 → FLAG_MED_FONT

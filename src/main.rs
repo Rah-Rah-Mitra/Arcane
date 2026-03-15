@@ -64,33 +64,6 @@ fn main() -> anyhow::Result<()> {
         Commands::ListChunks { project, source } => {
             commands::cmd_list_chunks(&project, source.as_deref())
         }
-        Commands::RecoverOutline {
-            file,
-            output,
-            dry_run,
-            min_font_ratio,
-            depth,
-            toc_pages,
-            no_inject,
-            fuzzy_threshold,
-            json,
-            seed_pdf,
-            seed_file,
-            seed_tolerance,
-        } => commands::cmd_recover_outline(
-            file,
-            output,
-            dry_run,
-            min_font_ratio,
-            depth,
-            toc_pages,
-            no_inject,
-            fuzzy_threshold,
-            json,
-            seed_pdf,
-            seed_file,
-            seed_tolerance,
-        ),
         Commands::Outline { file, depth } => commands::cmd_outline(file, depth),
         Commands::Remove { project, source } => commands::cmd_remove(&project, source.as_deref()),
         Commands::Merge { output, inputs } => commands::cmd_merge(output, inputs),

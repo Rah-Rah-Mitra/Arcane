@@ -107,18 +107,6 @@ pub fn ingest(source_path: &Path) -> Result<BlobRef> {
     })
 }
 
-/// Resolve a hash to the blob path on disk. Returns `None` if the blob
-/// is not present in the CAS.
-#[allow(dead_code)]
-pub fn resolve(hash: &str) -> Result<Option<PathBuf>> {
-    let target = blob_path(hash)?;
-    if target.exists() {
-        Ok(Some(target))
-    } else {
-        Ok(None)
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------

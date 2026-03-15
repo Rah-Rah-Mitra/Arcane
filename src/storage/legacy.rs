@@ -101,62 +101,11 @@ impl ProjectStore {
     }
 
     /// Remove a project by name.  Returns `true` if a project was removed.
-    #[allow(dead_code)]
     pub fn remove(&mut self, name: &str) -> bool {
         let before = self.data.projects.len();
         self.data.projects.retain(|p| p.name != name);
         self.data.projects.len() < before
     }
-}
-
-// ---------------------------------------------------------------------------
-// Migration helper
-// ---------------------------------------------------------------------------
-
-/// Migrate `projects.json` into the database if it exists and the database
-/// is empty.  The JSON file is renamed to `projects.json.migrated` after a
-/// successful migration.
-#[allow(dead_code)]
-pub fn migrate_if_needed(db: &crate::storage::Database) -> Result<()> {
-    let root = arcane_root()?;
-    let json_path = root.join("projects.json");
-
-    if !json_path.exists() {
-        return Ok(());
-    }
-
-    // Only migrate if the database has no projects yet.
-    let projects = db.list_projects().map_err(|e| anyhow::anyhow!("{e}"))?;
-    if !projects.is_empty() {
-        return Ok(());
-    }
-
-    tracing::info!("Migrating projects.json → arcane.db…");
-
-    let store = ProjectStore::load_from(&json_path)?;
-
-    for project in store.projects() {
-        db.create_project(&project.name)
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
-
-        for tag in &project.tags {
-            db.add_project_tag(&project.name, tag)
-                .map_err(|e| anyhow::anyhow!("{e}"))?;
-        }
-        // Note: source migration will be expanded in Phase 2 when CAS is available.
-    }
-
-    // Rename the old file to indicate migration is complete.
-    let migrated_path = root.join("projects.json.migrated");
-    fs::rename(&json_path, &migrated_path)
-        .with_context(|| "failed to rename projects.json after migration")?;
-
-    tracing::info!(
-        "Migration complete — {} project(s) imported. Old file renamed to projects.json.migrated.",
-        store.projects().len()
-    );
-
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------

@@ -99,13 +99,6 @@ pub trait Source {
     ///
     /// Returns `(page_count, chunk_count)` on success.
     fn chunk(&self, chunks_dir: &std::path::Path, depth: u32) -> Result<(u32, usize)>;
-
-    /// Placeholder for future YouTube transcript / video-lecture integration.
-    #[allow(dead_code)]
-    #[allow(unused_variables)]
-    fn youtube(&self, url: &str) -> Result<()> {
-        anyhow::bail!("YouTube integration is not yet implemented for this source type")
-    }
 }
 
 // ---------------------------------------------------------------------------

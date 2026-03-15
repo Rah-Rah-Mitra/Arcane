@@ -7,7 +7,6 @@ A local-first research archival application for organizing academic materials. A
 - **Project-Based Organization**: Group related sources under named projects with optional tags
 - **Smart PDF Chunking**: Automatically split textbooks into individual chapter files
 - **Multi-Level Chapter Detection**: Extracts chapter boundaries from PDF bookmarks/outlines with configurable depth (sub-chapters, sections)
-- **Outline Recovery Pipeline**: Reconstruct missing bookmarks using a multi-heuristic structural classifier — statistical typographic profiling (μ/σ/Z-scores), bold/italic/case feature extraction, Bayesian confidence scoring, and fuzzy verification — then inject them back as functional PDF outlines
 - **Page Sync / RANSAC Offset**: Correlate detected headings with TOC entries using RANSAC-style consensus voting to find the physical-to-logical page offset
 - **PDF Classification**: Instantly determine whether a PDF is text-based, scanned, or mixed
 - **Page Offset Detection**: Automatically calculate the front-matter delta between printed and physical page numbers
@@ -79,9 +78,10 @@ When you run `chunk`, Arcane tries three strategies in order:
 2. **Page Labels** (`/PageLabels`) — fallback when no usable bookmarks exist.
 3. **Whole-document fallback** — treats the entire PDF as one chunk.
 
-If a PDF has no bookmarks at all, use `arcane recover-outline` to reconstruct them
-before chunking. You can also use `arcane probe` to classify a PDF and
-`arcane detect-layout` to inspect its structural anchors.
+If a PDF has no bookmarks at all, chunking falls back to treating the entire
+document as a single chunk. Use `arcane probe` to classify a PDF and
+`arcane detect-layout` to inspect its structural anchors before deciding whether
+to chunk manually.
 
 Use `arcane outline <file>` to inspect a PDF's outline tree and page labels before chunking.
 Use `arcane chunk <project> --dry-run` to preview detected boundaries without writing files.
@@ -121,7 +121,6 @@ Chapter PDFs are written to `~/Arcane/Library/<Project>/Chunks/<Source>/`.
 | `arcane detect-layout <file> [--json] [--pages RANGE]` | Detect structural anchors via statistical typographic profiling. `--pages`: 0-based range (e.g. "0-5") |
 | `arcane find-offset <file> [--toc-pages RANGE] [--json]` | Calculate logical-to-physical page offset. `--toc-pages`: 1-based (e.g. "3-5") |
 | `arcane sync-pages <file> [--toc-pages RANGE] [--threshold T] [--json]` | RANSAC consensus offset from heading↔TOC matching. `--threshold` default: 0.6 (range: 0.0–1.0). `--toc-pages`: 1-based |
-| `arcane recover-outline <file> [--output PATH] [--dry-run] [--min-font-ratio R] [--depth N] [--toc-pages RANGE] [--no-inject] [--fuzzy-threshold T] [--json] [--seed-pdf PDF] [--seed-file JSON] [--seed-tolerance N]` | Recover and inject outline bookmarks. `--min-font-ratio` default: 1.2. `--depth` default: 2 (1 = chapters, 2 = +sections). `--fuzzy-threshold` default: 0.6 (0.0–1.0). `--seed-tolerance` default: 5. `--seed-pdf` and `--seed-file` are mutually exclusive |
 | `arcane ocr run <file> --pages RANGE [--dpi N] [--json]` | Run OCR on a page range. `--pages` required, 1-based (e.g. "1-5"). `--dpi` default: 150. Uses running OCR worker if available; otherwise starts a temporary worker automatically |
 | `arcane ocr init` | Validate OCR setup and warm the worker once (start + health-check + stop) |
 | `arcane ocr start [--idle-timeout-secs N]` | Start persistent background OCR worker (best for repeated OCR-heavy workflows) |
@@ -165,9 +164,6 @@ arcane ocr run "book.pdf" --pages 1-20 --dpi 150
 # Inspect / stop worker
 arcane ocr status
 arcane ocr stop
-
-# recover-outline now handles encoding-broken PDFs
-arcane recover-outline "book.pdf" --toc-pages 14-20 --output "book-fixed.pdf"
 ```
 
 `init-ocr` downloads everything to `~/Arcane/models/` and auto-detects at runtime.

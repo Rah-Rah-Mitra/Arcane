@@ -6,16 +6,11 @@ use tantivy::query::{BooleanQuery, Occur, QueryParser, TermQuery};
 use tantivy::schema::{IndexRecordOption, Value};
 use tantivy::{TantivyDocument, Term};
 
-use super::indexer::{
-    SearchIndex, FIELD_BODY, FIELD_CHAPTER, FIELD_PAGE, FIELD_PROJECT, FIELD_SOURCE_ID, FIELD_TITLE,
-};
+use super::indexer::{SearchIndex, FIELD_BODY, FIELD_CHAPTER, FIELD_PAGE, FIELD_PROJECT, FIELD_TITLE};
 
 /// A single search result with source context.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct SearchResult {
-    /// Source UUID.
-    pub source_id: String,
     /// Project name.
     pub project_name: String,
     /// Source title.
@@ -95,7 +90,6 @@ pub fn search(
         .search(&*query, &TopDocs::with_limit(limit))
         .context("search execution failed")?;
 
-    let source_id_field = index.schema().get_field(FIELD_SOURCE_ID).unwrap();
     let project_field = index.schema().get_field(FIELD_PROJECT).unwrap();
     let page_field = index.schema().get_field(FIELD_PAGE).unwrap();
 
@@ -105,12 +99,6 @@ pub fn search(
         let doc: TantivyDocument = searcher
             .doc(doc_address)
             .context("failed to retrieve document")?;
-
-        let source_id = doc
-            .get_first(source_id_field)
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
 
         let project_name = doc
             .get_first(project_field)
@@ -136,7 +124,6 @@ pub fn search(
             .unwrap_or(0);
 
         results.push(SearchResult {
-            source_id,
             project_name,
             source_title,
             chapter_title,

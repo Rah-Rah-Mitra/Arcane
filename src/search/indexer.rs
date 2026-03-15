@@ -4,7 +4,7 @@
 //! The index stores one document per PDF page with fields for source identity,
 //! project membership, chapter context, and the full extracted text.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result};
 use tantivy::schema::*;
@@ -110,7 +110,8 @@ impl SearchIndex {
         let mut indexed_count = 0u64;
 
         for page in pages {
-            if page.text.trim().is_empty() {
+            let text = page.text.trim();
+            if text.is_empty() || page.word_count == 0 {
                 continue;
             }
 
@@ -120,7 +121,7 @@ impl SearchIndex {
             doc.add_text(title_field, source_title);
             doc.add_text(chapter_field, chapter);
             doc.add_u64(page_field, page.page_index as u64);
-            doc.add_text(body_field, &page.text);
+            doc.add_text(body_field, text);
 
             writer.add_document(doc)?;
             indexed_count += 1;
@@ -145,14 +146,6 @@ impl SearchIndex {
         writer.commit()?;
 
         Ok(())
-    }
-
-    /// Return the index directory path.
-    #[allow(dead_code)]
-    pub fn index_path(&self) -> Option<PathBuf> {
-        // tantivy doesn't expose the directory path directly,
-        // but the caller typically knows where they opened it.
-        None
     }
 }
 

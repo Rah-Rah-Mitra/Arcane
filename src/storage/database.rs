@@ -6,9 +6,10 @@
 use rusqlite::Connection;
 
 use crate::error::StorageError;
-use crate::models::Project;
 use crate::storage::filesystem;
 use crate::storage::migrations;
+#[cfg(test)]
+use crate::models::Project;
 
 /// The primary database handle for Arcane.
 pub struct Database {
@@ -46,12 +47,6 @@ impl Database {
         Ok(Self { conn })
     }
 
-    /// Get a reference to the underlying connection.
-    #[allow(dead_code)]
-    pub fn conn(&self) -> &Connection {
-        &self.conn
-    }
-
     // ── Project operations ───────────────────────────────────────────────
 
     /// Create a new project. Returns the generated UUID.
@@ -68,7 +63,7 @@ impl Database {
     }
 
     /// List all projects (without sources — use `get_project` for full detail).
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn list_projects(&self) -> Result<Vec<Project>, StorageError> {
         let mut stmt = self
             .conn
@@ -122,24 +117,6 @@ impl Database {
         Ok(affected > 0)
     }
 
-    /// Get all source titles for a project (used before deletion to clean up search index).
-    #[allow(dead_code)]
-    pub fn get_source_titles(&self, project_name: &str) -> Result<Vec<String>, StorageError> {
-        let project_id =
-            self.get_project_id(project_name)?
-                .ok_or_else(|| StorageError::ProjectNotFound {
-                    name: project_name.to_string(),
-                })?;
-
-        let mut stmt = self
-            .conn
-            .prepare("SELECT title FROM sources WHERE project_id = ?1")?;
-        let titles = stmt
-            .query_map([&project_id], |row| row.get(0))?
-            .collect::<Result<Vec<String>, _>>()?;
-        Ok(titles)
-    }
-
     /// Delete a source by project name and title. Returns the blob_hash if one
     /// was associated (caller can use it for CAS cleanup).
     /// FK cascades handle source_tags, chunks, and search_meta.
@@ -175,7 +152,7 @@ impl Database {
     // ── Tag operations ───────────────────────────────────────────────────
 
     /// Get all tags for a project.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn get_project_tags(&self, project_name: &str) -> Result<Vec<String>, StorageError> {
         let mut stmt = self.conn.prepare(
             "SELECT pt.tag FROM project_tags pt
@@ -190,7 +167,6 @@ impl Database {
     }
 
     /// Add a tag to a project.
-    #[allow(dead_code)]
     pub fn add_project_tag(&self, project_name: &str, tag: &str) -> Result<(), StorageError> {
         let project_id =
             self.get_project_id(project_name)?
@@ -206,7 +182,6 @@ impl Database {
     }
 
     /// Remove a tag from a project.
-    #[allow(dead_code)]
     pub fn remove_project_tag(&self, project_name: &str, tag: &str) -> Result<bool, StorageError> {
         let project_id =
             self.get_project_id(project_name)?
@@ -222,7 +197,7 @@ impl Database {
     }
 
     /// Find all projects that have a given tag.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn find_projects_by_tag(&self, tag: &str) -> Result<Vec<String>, StorageError> {
         let mut stmt = self.conn.prepare(
             "SELECT p.name FROM projects p
@@ -237,7 +212,7 @@ impl Database {
     }
 
     /// Add a tag to a source (by source title within a project).
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn add_source_tag(
         &self,
         project_name: &str,
@@ -259,7 +234,7 @@ impl Database {
     }
 
     /// Get all tags for a source.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn get_source_tags(
         &self,
         project_name: &str,
@@ -282,6 +257,7 @@ impl Database {
     }
 
     /// Get a source UUID by project name and source title.
+    #[cfg(test)]
     fn get_source_id(
         &self,
         project_name: &str,
@@ -323,7 +299,7 @@ impl Database {
     }
 
     /// Check whether a blob with the given hash exists in the database.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn blob_exists(&self, hash: &str) -> Result<bool, StorageError> {
         let count: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM blobs WHERE blake3_hash = ?1",
@@ -334,7 +310,7 @@ impl Database {
     }
 
     /// Get the stored path of a blob by its hash.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn get_blob_path(&self, hash: &str) -> Result<Option<String>, StorageError> {
         let mut stmt = self
             .conn
@@ -397,7 +373,7 @@ impl Database {
 
     /// Get all sources for a project, returned as `SourceMeta` for backward
     /// compatibility with the chunking pipeline.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn get_sources(
         &self,
         project_name: &str,

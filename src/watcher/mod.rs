@@ -14,7 +14,6 @@ use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 
 /// Events emitted by the file watcher.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub enum WatchEvent {
     /// A new PDF was created or moved into a watched directory.
     NewPdf {
@@ -22,15 +21,9 @@ pub enum WatchEvent {
         path: std::path::PathBuf,
     },
     /// A file was modified in a watched directory.
-    Modified {
-        project_name: String,
-        path: std::path::PathBuf,
-    },
+    Modified { path: std::path::PathBuf },
     /// A file was removed from a watched directory.
-    Removed {
-        project_name: String,
-        path: std::path::PathBuf,
-    },
+    Removed { path: std::path::PathBuf },
 }
 
 /// Watch a project's Originals directory and run the callback for each event.

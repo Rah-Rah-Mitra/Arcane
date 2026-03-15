@@ -39,7 +39,6 @@ pub enum LabelStyle {
 
 /// A single PageLabel range as defined by PDF spec.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct PageLabelRange {
     /// 0-based physical page index where this labelling rule begins.
     pub physical_start: u32,
@@ -52,7 +51,6 @@ pub struct PageLabelRange {
 }
 
 /// Resolver that maps between physical (0-based) and logical page identifiers.
-#[allow(dead_code)]
 pub struct PageLabelResolver {
     /// Sorted by `physical_start` ascending.
     ranges: Vec<PageLabelRange>,
@@ -171,7 +169,6 @@ impl PageLabelResolver {
 // Resolution methods
 // ---------------------------------------------------------------------------
 
-#[allow(dead_code)]
 impl PageLabelResolver {
     /// Given a 0-based physical page index, return the human-readable label.
     pub fn physical_to_label(&self, physical: u32) -> String {
@@ -307,7 +304,6 @@ impl PageLabelResolver {
 // Roman numeral conversion
 // ---------------------------------------------------------------------------
 
-#[allow(dead_code)]
 fn to_roman(mut n: u32) -> String {
     const TABLE: &[(u32, &str)] = &[
         (1000, "M"),
@@ -334,7 +330,6 @@ fn to_roman(mut n: u32) -> String {
     result
 }
 
-#[allow(dead_code)]
 fn from_roman(s: &str) -> Option<u32> {
     let roman_val = |c: char| -> Option<u32> {
         match c {
@@ -373,7 +368,6 @@ fn from_roman(s: &str) -> Option<u32> {
 // Alpha conversion
 // ---------------------------------------------------------------------------
 
-#[allow(dead_code)]
 fn to_alpha(n: u32) -> String {
     if n == 0 {
         return String::new();
@@ -382,7 +376,6 @@ fn to_alpha(n: u32) -> String {
     String::from(c as char)
 }
 
-#[allow(dead_code)]
 fn from_alpha(s: &str) -> Option<u32> {
     if s.len() != 1 {
         return None;

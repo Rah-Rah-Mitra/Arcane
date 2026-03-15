@@ -1,7 +1,6 @@
 //! CLI layer — clap command definitions and dispatch.
 
 pub mod commands;
-pub mod output;
 
 use std::path::PathBuf;
 
@@ -217,68 +216,6 @@ pub enum Commands {
         json: bool,
     },
 
-    /// Recover PDF outline bookmarks using font-size heuristics.
-    ///
-    /// Useful for PDFs that have no /Outlines and no /PageLabels (e.g. LaTeX
-    /// books with stripped metadata).  Run with --dry-run first to preview
-    /// what headings are detected, then re-run without it to write the fixed PDF.
-    RecoverOutline {
-        /// Path to the PDF file to analyse.
-        file: PathBuf,
-
-        /// Write the fixed PDF to a new path instead of overwriting the input.
-        #[arg(long)]
-        output: Option<PathBuf>,
-
-        /// Preview detected headings without modifying any file.
-        #[arg(long)]
-        dry_run: bool,
-
-        /// Font-size ratio above body text required to classify text as a heading.
-        /// 1.2 means any text 20 % larger than the most common size is a heading.
-        #[arg(long, default_value_t = 1.2)]
-        min_font_ratio: f64,
-
-        /// Maximum heading depth to inject (1 = chapter-level only, 2 = chapters + sections).
-        #[arg(long, default_value_t = 2)]
-        depth: u32,
-
-        /// TOC page range (1-based, e.g. "3-5") for targeted heading extraction.
-        #[arg(long)]
-        toc_pages: Option<String>,
-
-        /// Skip outline injection (preview only, like --dry-run but still runs
-        /// the full pipeline for JSON output).
-        #[arg(long)]
-        no_inject: bool,
-
-        /// Minimum fuzzy-match similarity (0.0–1.0) for heading verification.
-        #[arg(long, default_value_t = 0.6)]
-        fuzzy_threshold: f64,
-
-        /// Output the full pipeline result as JSON.
-        #[arg(long)]
-        json: bool,
-
-        /// Path to a reference PDF whose /Outlines provide seed chapter titles.
-        /// The reference PDF must have a working outline (verify with `arcane outline`).
-        /// Mutually exclusive with --seed-file.
-        #[arg(long, value_name = "PDF", conflicts_with = "seed_file")]
-        seed_pdf: Option<PathBuf>,
-
-        /// Path to a JSON seed file with known chapter titles and page numbers.
-        /// Format: [{"title": "...", "page": N, "depth": D}, ...]
-        /// Pages are 1-based logical page numbers matching `arcane outline` display.
-        #[arg(long, value_name = "JSON")]
-        seed_file: Option<PathBuf>,
-
-        /// Page-search tolerance window (±N pages) when locating seed titles
-        /// in the target PDF.  Increase if chapters may be shifted by more than
-        /// the default.
-        #[arg(long, default_value_t = 5)]
-        seed_tolerance: u32,
-    },
-
     /// Show the outline (bookmarks) and page labels of a PDF file.
     Outline {
         /// Path to the PDF file.
@@ -342,7 +279,7 @@ pub enum Commands {
     /// Download OCR model files and runtime libraries to ~/Arcane/models/.
     ///
     /// Downloads PaddleOCR v5 models, ONNX Runtime, and PDFium for the
-    /// current platform.  After this command, `arcane recover-outline` will
+    /// current platform.  After this command, OCR-powered commands will
     /// auto-detect the models — no environment variables needed.
     InitOcr {
         /// Override the models directory (default: ~/Arcane/models/).
@@ -432,7 +369,7 @@ pub enum OcrCommand {
     /// Start the persistent OCR worker in the background.
     ///
     /// Loads ONNX Runtime and PaddleOCR models once, then serves requests
-    /// from `arcane ocr run` and pipeline commands (e.g. `recover-outline`)
+    /// from `arcane ocr run` and other PDF analysis commands
     /// via a TCP loopback socket — eliminating the ~5 s model-load overhead
     /// on every call.  Requires `cargo build --features ocr` and `arcane init-ocr`.
     Start {

@@ -9,7 +9,6 @@ Welcome to Arcane! This guide will help you get started with organizing your res
 - [Getting Started](#getting-started)
 - [Command Reference](#command-reference)
 - [Common Workflows](#common-workflows)
-- [PDF Analysis Pipeline](#pdf-analysis-pipeline)
 - [Understanding the Filesystem](#understanding-the-filesystem)
 - [Removing Sources and Projects](#removing-sources-and-projects)
 - [Troubleshooting](#troubleshooting)
@@ -537,114 +536,6 @@ Matches:
 - `find-offset` is faster and works well when `/PageLabels` exists or the TOC is small.
 - `sync-pages` is the right choice for books with no `/PageLabels`, large/complex TOCs, or when you need a match confidence table for verification.
 
-### `arcane recover-outline <file> [options]`
-
-Recovers and injects outline bookmarks into PDFs that have no `/Outlines`, using a tiered pipeline:
-
-1. **Probe** — classify the document (text-based or scanned)
-2. **Profile** — build a statistical typographic profile (μ, σ, body centroid, gap p90) over the first 50 pages
-3. **Classify** — extract `TextFeature` vectors (Z-score, bold/italic flags, case pattern, isolation) and classify structural anchors with Bayesian confidence scoring
-4. **Offset** — calculate the front-matter page delta
-5. **Verify** — fuzzy-match each heading against the text on its target page
-6. **Inject** — write a hierarchical `/Outlines` tree (Chapter > Section nesting)
-
-**Options:**
-- `--output PATH`: Write the fixed PDF to a new file instead of overwriting the input
-- `--dry-run`: Preview detected headings without writing anything
-- `--min-font-ratio R`: Font-size multiplier above body text to classify as a heading (default: 1.2)
-- `--depth N`: Maximum heading depth to inject (1 = chapter-level only, 2 = chapters + sections; default: 2)
-- `--toc-pages START-END`: TOC page range (1-based, e.g. "7-12") for deterministic matching — bypasses TOC discovery and speeds up the process by ~40%
-- `--no-inject`: Run the full pipeline but skip injection (useful with `--json` for inspection)
-- `--fuzzy-threshold T`: Minimum similarity (0.0–1.0) for heading verification (default: 0.6)
-- `--json`: Output the full pipeline result as JSON (probe, layout, offset, headings, verification)
-- `--seed-pdf PATH`: Path to a reference PDF whose `/Outlines` provide ground-truth chapter titles (see [Seeded Recovery](#seeded-outline-recovery) below)
-- `--seed-file PATH`: Path to a JSON file with known chapter titles and page numbers (alternative to `--seed-pdf`)
-- `--seed-tolerance N`: ±N page search window when locating seed titles in the target PDF (default: 5)
-
-**Workflow:**
-```bash
-# 1. Classify the PDF
-arcane probe "book.pdf"
-
-# 2. Preview detected headings and verification results
-arcane recover-outline "book.pdf" --dry-run
-
-# 3. If too many headings, raise the ratio; if too few, lower it
-arcane recover-outline "book.pdf" --dry-run --min-font-ratio 1.4
-
-# 4. For deterministic results, specify the TOC pages
-arcane recover-outline "book.pdf" --dry-run --toc-pages 7-12
-
-# 5. Generate a fixed copy with injected bookmarks
-arcane recover-outline "book.pdf" --output "book-recovered.pdf"
-
-# 6. Get full pipeline output as JSON for inspection
-arcane recover-outline "book.pdf" --no-inject --json
-
-# 7. Verify the injected outlines look correct
-arcane outline "book-recovered.pdf" --depth 3
-
-# 8. Replace the source in your project and re-chunk
-arcane remove "Project" "Book Title"
-arcane add    "Project" "book-recovered.pdf" --textbook --title "Book Title"
-arcane chunk  "Project" --source "Book Title" --depth 1
-```
-
-**Tips:**
-- Use `arcane probe` first to confirm the PDF is text-based (scanned PDFs require the `--features ocr` build)
-- Increase `--min-font-ratio` (e.g. to 1.4) if too many section headings are detected
-- Use `--depth 1` for chapter-level chunks only; `--depth 2` splits at section level too
-- The `--toc-pages` flag provides ~40% speedup and 100% deterministic matching when you know where the TOC is
-- LaTeX books (Computer Modern fonts: CMBX12, CMBX17) work particularly well
-- Use `--json` to pipe results into other tools or scripts
-
-#### Seeded Outline Recovery
-
-When a PDF has broken font encoding (garbled text like `~`, `I-I'`, `[jJ` instead of chapter titles), the heuristic pipeline detects headings at the right positions but cannot read their names. If you have a reference copy of the same book with a working outline, you can **seed** the recovery with known titles using `--seed-pdf`:
-
-```bash
-# Use a reference PDF's outline as ground-truth titles
-arcane recover-outline "broken-copy.pdf" \
-  --seed-pdf "good-copy.pdf" \
-  --seed-tolerance 3 \
-  --depth 1 \
-  --output "fixed-copy.pdf"
-```
-
-The seeded pipeline:
-1. Extracts the outline from the reference PDF (titles + physical page numbers + depth levels)
-2. Calculates the page offset between the two PDFs using a vote-based consensus algorithm
-3. Verifies each seed title against the target PDF's page text (via OCR if compiled, or text extraction)
-4. Injects the verified outline with correct titles and page destinations
-
-Each seed entry is reported as one of:
-- **OK** — title was confirmed on the target page (text or OCR match ≥ threshold)
-- **EST** — title could not be confirmed (garbled text); the page number is estimated from the offset
-- **OOR** — the computed target page is outside the document's page range
-
-**Example output:**
-```
-Seed verification: 5 confirmed, 14 estimated, 0 out-of-range
-  Page  Status Title
-  ────────────────────────────────────────────────────────────────────────
-  p1    [EST]  Front Matter
-  p21   [OK ]  1 Introduction
-  p35   [EST]  2 Representation of a Three-Dimensional Moving Scene
-  ...
-```
-
-If you don't have a reference PDF, you can create a JSON seed file manually:
-
-```json
-[
-  {"title": "1 Introduction", "page": 21},
-  {"title": "2 Sorting Algorithms", "page": 35, "depth": 1},
-  {"title": "A Appendix", "page": 461}
-]
-```
-
-Then use `--seed-file seeds.json` instead of `--seed-pdf`. Pages are 1-based (matching `arcane outline` display). The `depth` field is optional and defaults to 1.
-
 ### `arcane ocr run <file> --pages <RANGE> [--dpi N] [--json]`
 
 Runs OCR on a page range of any PDF and outputs the recognised text. Requires a build with OCR support (`--features ocr`) and models downloaded via `arcane init-ocr`.
@@ -705,7 +596,6 @@ Contents
 - Use 150 DPI (the default) for speed; increase to 200–300 DPI for small or dense text
 - Pipe `--json` output to `jq` for filtering: `arcane ocr run book.pdf --pages "1-3" --json | jq '.[].regions[].text'`
 - For repeated OCR-heavy workflows, run `arcane ocr start` first and stop with `arcane ocr stop` when done
-- Combine with `recover-outline --seed-file` to manually build an outline from OCR'd TOC pages
 
 ### `arcane ocr init`
 
@@ -961,119 +851,6 @@ arcane search "red-black trees" --source "CLRS 4th Edition"
 arcane remove "Algorithms Study" "Sedgewick & Wayne"
 ```
 
-## PDF Analysis Pipeline
-
-Arcane includes a full pipeline for analysing and recovering the structure of PDFs that lack bookmarks. The commands build on each other:
-
-```
-arcane probe book.pdf                  # Step 1: Is it text-based or scanned?
-arcane detect-layout book.pdf          # Step 2: What headings / font distribution does it have?
-arcane ocr run book.pdf --pages "5-8"  # Step 2 alt: Read pages via OCR (for scanned/garbled PDFs)
-arcane sync-pages book.pdf             # Step 3: Find the physical↔printed page offset (RANSAC)
-arcane find-offset book.pdf            # Step 3 alt: Simpler offset detection (PageLabels / TOC)
-arcane recover-outline book.pdf        # Step 4: Inject recovered bookmarks into the PDF
-arcane recover-outline book.pdf \
-  --seed-pdf reference.pdf             # Step 4 alt: Seed from a reference copy with known outline
-arcane outline book-recovered.pdf      # Step 5: Verify the injected outline looks right
-```
-
-### Workflow: Fixing a Book with No Bookmarks
-
-```bash
-# Confirm the PDF is text-based (not scanned)
-arcane probe ~/Books/vision.pdf
-
-# Preview the structural analysis — check body_font_size is sensible (e.g. ~10pt)
-arcane detect-layout ~/Books/vision.pdf
-
-# If the book has a TOC, use sync-pages to find the page offset
-arcane sync-pages ~/Books/vision.pdf --toc-pages 14-20
-
-# Preview detected headings with the recovered structure
-arcane recover-outline ~/Books/vision.pdf --dry-run --toc-pages 14-20
-
-# Write a fixed copy with injected bookmarks
-arcane recover-outline ~/Books/vision.pdf --output ~/Books/vision-fixed.pdf --toc-pages 14-20
-
-# Verify bookmarks were injected correctly
-arcane outline ~/Books/vision-fixed.pdf --depth 3
-
-# Add the fixed copy to your project and chunk it
-arcane add "Computer Vision" ~/Books/vision-fixed.pdf --textbook --title "3-D Vision"
-arcane chunk "Computer Vision" --source "3-D Vision" --depth 1
-```
-
-### Workflow: Recovering an Outline from a Reference Copy
-
-When you have a PDF with broken font encoding (garbled chapter titles) but you also have a clean copy of the same book with a working outline:
-
-```bash
-# Check the target PDF — confirm it's garbled
-arcane probe ~/Books/vision-garbled.pdf
-arcane recover-outline ~/Books/vision-garbled.pdf --dry-run
-# → headings detected but titles are symbols like ~, [jJ, I-I'
-
-# Verify the reference copy has a good outline
-arcane outline ~/Books/vision-clean.pdf
-
-# Seed recovery from the reference and write a fixed copy
-arcane recover-outline ~/Books/vision-garbled.pdf \
-  --seed-pdf ~/Books/vision-clean.pdf \
-  --seed-tolerance 3 \
-  --depth 1 \
-  --output ~/Books/vision-fixed.pdf
-
-# Verify the result
-arcane outline ~/Books/vision-fixed.pdf
-```
-
-### Workflow: Building an Outline from OCR'd TOC Pages
-
-When there is no reference copy, you can OCR the table-of-contents pages and manually create a seed file:
-
-```bash
-# OCR the TOC pages (requires --features ocr build + arcane init-ocr)
-arcane ocr run ~/Books/textbook.pdf --pages "5-8"
-
-# From the OCR output, create a JSON seed file with the chapter titles and pages:
-# seeds.json:
-# [
-#   {"title": "1 Introduction", "page": 1},
-#   {"title": "2 Sorting Algorithms", "page": 15},
-#   {"title": "3 Graph Theory", "page": 42}
-# ]
-
-# Use the seed file to inject the outline
-arcane recover-outline ~/Books/textbook.pdf \
-  --seed-file seeds.json \
-  --depth 1 \
-  --output ~/Books/textbook-fixed.pdf
-
-# Verify
-arcane outline ~/Books/textbook-fixed.pdf
-```
-
-### Understanding `body_font_size`
-
-The `body_font_size` field in `detect-layout` output is the mode of the effective font-size distribution — the size that the majority of body text uses. It is derived from the full typographic profile (μ, σ, histogram mode over 50 pages), so it is robust against outliers like large chapter titles or tiny footnotes.
-
-> **Before the Tm-scale fix:** PDFs built with tools that store a nominal `1pt` font size scaled by the text matrix would report `body_font_size: 1.0` and detect zero headings. The fix tracks the `Tm` operator to compute `effective_size = nominal × √(a²+b²)`, resolving the issue.
-
-### Confidence Scores
-
-Every structural anchor detected by `detect-layout` and `recover-outline` has a confidence score between 0.0 and 1.0:
-
-| Score range | Interpretation |
-|-------------|----------------|
-| 0.85 – 1.0  | Very high — large font + bold + isolated + TOC match |
-| 0.65 – 0.85 | High — bold or case-pattern match with isolation |
-| 0.40 – 0.65 | Medium — single signal (font size alone) |
-| < 0.40      | Dropped — insufficient evidence |
-
-The Bayesian boosts applied:
-- **+0.20** when the anchor text fuzzy-matches a TOC entry title (≥ 0.80 Levenshtein similarity)
-- **+0.10** when the anchor's physical page equals the expected page from the consensus offset
-
 ## Understanding the Filesystem
 
 Arcane stores everything in `~/Arcane/`:
@@ -1155,7 +932,7 @@ This will:
 
 **Possible causes:**
 
-1. **The PDF doesn't have chapter metadata**: Some PDFs don't have bookmarks or page labels. Use `arcane outline <file>` to check. If there are no outlines, use `arcane recover-outline` to reconstruct them from font-size analysis.
+1. **The PDF doesn't have chapter metadata**: Some PDFs don't have bookmarks or page labels. Use `arcane outline <file>` to check. If there are no outlines, Arcane will treat the PDF as a single chunk — you'll need to provide chapter boundaries manually.
 
 2. **The source wasn't marked as a textbook**: Make sure you used the `--textbook` flag when adding the source.
 
@@ -1172,10 +949,6 @@ arcane probe ~/path/to/book.pdf
 
 # Inspect the PDF's outline
 arcane outline ~/path/to/book.pdf --depth 3
-
-# If no outlines exist, recover them
-arcane recover-outline ~/path/to/book.pdf --dry-run
-arcane recover-outline ~/path/to/book.pdf --output ~/path/to/book-fixed.pdf
 
 # Preview what chapters will be detected
 arcane chunk "Project" --dry-run --depth 2

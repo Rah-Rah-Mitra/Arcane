@@ -11,9 +11,7 @@ pub mod offset;
 pub mod ops;
 pub mod outlines;
 pub mod page_labels;
-pub mod pipeline;
 pub mod probe;
-pub mod seed;
 pub mod text;
 pub mod writer;
 

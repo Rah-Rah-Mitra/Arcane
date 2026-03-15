@@ -99,12 +99,14 @@ pub(crate) fn dirs_home() -> Result<PathBuf> {
 
 /// Returns the path to `~/Arcane/ocr-worker.json` — the worker runtime
 /// state file written by the background worker on startup.
+#[cfg(feature = "ocr")]
 pub fn worker_state_path() -> Result<PathBuf> {
     Ok(arcane_root()?.join("ocr-worker.json"))
 }
 
 /// Returns the path to `~/Arcane/ocr-worker.log` — stdout/stderr of the
 /// background worker process.
+#[cfg(feature = "ocr")]
 pub fn worker_log_path() -> Result<PathBuf> {
     Ok(arcane_root()?.join("ocr-worker.log"))
 }
@@ -112,24 +114,6 @@ pub fn worker_log_path() -> Result<PathBuf> {
 // ---------------------------------------------------------------------------
 // Symlink helper
 // ---------------------------------------------------------------------------
-
-/// Create a symlink in `originals_dir` pointing at the original PDF.
-/// On platforms where symlinks are unavailable the file is copied instead.
-#[allow(dead_code)]
-pub fn link_original(project_name: &str, source_path: &Path) -> Result<PathBuf> {
-    let target_dir = originals_dir(project_name)?;
-    let file_name = source_path
-        .file_name()
-        .context("source path has no file name")?;
-    let link_path = target_dir.join(file_name);
-
-    if link_path.exists() {
-        return Ok(link_path);
-    }
-
-    create_link_or_copy(source_path, &link_path)?;
-    Ok(link_path)
-}
 
 /// Create a symlink in `originals_dir` pointing at a CAS blob, using the
 /// original filename for the link name.
