@@ -122,7 +122,12 @@ Chapter PDFs are written to `~/Arcane/Library/<Project>/Chunks/<Source>/`.
 | `arcane find-offset <file> [--toc-pages RANGE] [--json]` | Calculate logical-to-physical page offset. `--toc-pages`: 1-based (e.g. "3-5") |
 | `arcane sync-pages <file> [--toc-pages RANGE] [--threshold T] [--json]` | RANSAC consensus offset from heading↔TOC matching. `--threshold` default: 0.6 (range: 0.0–1.0). `--toc-pages`: 1-based |
 | `arcane recover-outline <file> [--output PATH] [--dry-run] [--min-font-ratio R] [--depth N] [--toc-pages RANGE] [--no-inject] [--fuzzy-threshold T] [--json] [--seed-pdf PDF] [--seed-file JSON] [--seed-tolerance N]` | Recover and inject outline bookmarks. `--min-font-ratio` default: 1.2. `--depth` default: 2 (1 = chapters, 2 = +sections). `--fuzzy-threshold` default: 0.6 (0.0–1.0). `--seed-tolerance` default: 5. `--seed-pdf` and `--seed-file` are mutually exclusive |
-| `arcane ocr <file> --pages RANGE [--dpi N] [--json]` | Run OCR on a page range. `--pages` required, 1-based (e.g. "1-5"). `--dpi` default: 150. Requires `--features ocr` build + `arcane init-ocr` |
+| `arcane ocr run <file> --pages RANGE [--dpi N] [--json]` | Run OCR on a page range. `--pages` required, 1-based (e.g. "1-5"). `--dpi` default: 150. Uses running OCR worker if available; otherwise starts a temporary worker automatically |
+| `arcane ocr init` | Validate OCR setup and warm the worker once (start + health-check + stop) |
+| `arcane ocr start [--idle-timeout-secs N]` | Start persistent background OCR worker (best for repeated OCR-heavy workflows) |
+| `arcane ocr stop` | Stop the persistent OCR worker |
+| `arcane ocr status` | Show OCR worker status (PID, port, uptime, served requests) |
+| `arcane ocr restart [--idle-timeout-secs N]` | Restart the OCR worker |
 | `arcane init-ocr [--models-dir DIR] [--skip-runtime] [--force]` | Download OCR models and runtime libraries to ~/Arcane/models/ |
 | `arcane remove <project> [source]` | Remove a source or entire project (if source omitted) |
 | `arcane merge <output> <inputs…>` | Merge multiple PDF files into one |
@@ -142,8 +147,24 @@ optional OCR overlay tier using PaddleOCR v5 via ONNX Runtime:
 # Build with OCR
 cargo build --release --features ocr
 
+# Or install release binary to Cargo bin (PATH: %USERPROFILE%/.cargo/bin)
+cargo install --path . --force --features ocr
+
 # Download models + runtime libraries (one-time, all platforms)
 arcane init-ocr
+
+# Optional: warm OCR setup (starts worker, verifies, then stops)
+arcane ocr init
+
+# Start persistent worker for faster repeated OCR calls
+arcane ocr start
+
+# Run OCR (uses persistent worker if running)
+arcane ocr run "book.pdf" --pages 1-20 --dpi 150
+
+# Inspect / stop worker
+arcane ocr status
+arcane ocr stop
 
 # recover-outline now handles encoding-broken PDFs
 arcane recover-outline "book.pdf" --toc-pages 14-20 --output "book-fixed.pdf"
@@ -154,6 +175,10 @@ Use `--force` to re-download, `--skip-runtime` to skip ONNX Runtime and PDFium D
 
 For non-English PDFs, override the recognition model and dictionary via env vars:
 `ARCANE_OCR_REC_MODEL`, `ARCANE_OCR_DICT` (see `src/pdf/ocr.rs` for details).
+
+Worker behavior:
+- If the worker is already running, OCR calls reuse loaded models for best latency.
+- If no worker is running, OCR calls auto-start a temporary worker and stop it when done.
 
 ## Requirements
 

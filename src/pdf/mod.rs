@@ -19,6 +19,8 @@ pub mod writer;
 
 #[cfg(feature = "ocr")]
 pub mod ocr;
+#[cfg(feature = "ocr")]
+pub mod worker;
 
 // Re-export string helpers used across the PDF module.
 pub(crate) use engine::{pdf_string_to_string, pdf_string_to_string_opt};

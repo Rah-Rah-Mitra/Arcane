@@ -141,16 +141,28 @@ fn main() -> anyhow::Result<()> {
             threshold,
             json,
         } => commands::cmd_sync_pages(file, toc_pages, threshold, json),
-        Commands::Ocr {
-            file,
-            pages,
-            dpi,
-            json,
-        } => commands::cmd_ocr(file, pages, dpi, json),
+        Commands::Ocr { cmd } => {
+            use cli::OcrCommand::*;
+            match cmd {
+                Init => commands::cmd_ocr_worker_init(),
+                Run { file, pages, dpi, json } => commands::cmd_ocr(file, pages, dpi, json),
+                Start { idle_timeout_secs } => {
+                    commands::cmd_ocr_worker_start(idle_timeout_secs)
+                }
+                Stop => commands::cmd_ocr_worker_stop(),
+                Status => commands::cmd_ocr_worker_status(),
+                Restart { idle_timeout_secs } => {
+                    commands::cmd_ocr_worker_restart(idle_timeout_secs)
+                }
+            }
+        }
         Commands::InitOcr {
             models_dir,
             skip_runtime,
             force,
         } => commands::cmd_init_ocr(models_dir, skip_runtime, force),
+        Commands::WorkerServe { idle_timeout_secs } => {
+            commands::cmd_worker_serve(idle_timeout_secs)
+        }
     }
 }

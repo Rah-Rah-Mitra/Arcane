@@ -128,6 +128,14 @@ fn get_ocr_engine() -> anyhow::Result<&'static OAROCR> {
     }
 }
 
+/// Eagerly initialise the ONNX Runtime and OCR engine without running any
+/// inference.  Called by the worker on startup to front-load the model-load
+/// latency so the first client request is served without delay.
+pub fn init_ocr_engine() -> anyhow::Result<()> {
+    ensure_ort_loaded()?;
+    get_ocr_engine().map(|_| ())
+}
+
 // ---------------------------------------------------------------------------
 // Pdfium binding — check ~/Arcane/models/ first
 // ---------------------------------------------------------------------------
@@ -154,7 +162,7 @@ fn bind_pdfium() -> Result<Pdfium> {
 const BATCH_SIZE: usize = 16;
 
 /// A single recognized text region from OCR.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct OcrRegion {
     /// The recognized text.
     pub text: String,
@@ -169,7 +177,7 @@ pub struct OcrRegion {
 }
 
 /// Per-page OCR result.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct OcrPageResult {
     /// 0-based page index.
     pub page_index: u32,
@@ -203,7 +211,10 @@ impl OcrPageResult {
 ///
 /// The OCR engine is cached across calls (OnceLock) and pages are batched
 /// (up to 16 at a time) to minimise ONNX session overhead.
-pub fn extract_headings_ocr(
+///
+/// This is the direct in-process implementation used by both the CLI and the
+/// worker server.  For transparent worker routing, use [`extract_headings_ocr`].
+pub fn extract_headings_ocr_direct(
     path: &Path,
     page_indices: &[u32],
     dpi: u32,
@@ -225,40 +236,29 @@ pub fn extract_headings_ocr(
         .context("pdfium: failed to open PDF")?;
 
     let scale = dpi as f32 / 72.0;
+    let render_config = PdfRenderConfig::new().scale_page_by_factor(scale);
 
-    // Phase 1: render all pages to images.
-    // Use DynamicImage::to_rgb8() which returns ImageBuffer<Rgb<u8>, Vec<u8>> —
-    // the exact type oar-ocr's predict() expects.
-    let mut images = Vec::with_capacity(page_indices.len());
-    let mut meta: Vec<(u32, f32, f32)> = Vec::with_capacity(page_indices.len());
-
-    for &page_idx in page_indices {
-        let page = doc
-            .pages()
-            .get(page_idx as u16)
-            .with_context(|| format!("pdfium: page {page_idx} out of range"))?;
-
-        let page_h_pts = page.height().value;
-        let render_config = PdfRenderConfig::new().scale_page_by_factor(scale);
-        let dynamic_img = page
-            .render_with_config(&render_config)
-            .context("pdfium: page render failed")?
-            .as_image();
-
-        let img_h_px = dynamic_img.height() as f32;
-        images.push(dynamic_img.to_rgb8());
-        meta.push((page_idx, page_h_pts, img_h_px));
-    }
-
-    // Phase 2: batch OCR — process in chunks of BATCH_SIZE.
     let mut results: Vec<PositionedText> = Vec::new();
-    let mut img_idx = 0;
+    for batch_pages in page_indices.chunks(BATCH_SIZE) {
+        let mut batch = Vec::with_capacity(batch_pages.len());
+        let mut batch_meta: Vec<(u32, f32, f32)> = Vec::with_capacity(batch_pages.len());
 
-    while !images.is_empty() {
-        let batch_size = images.len().min(BATCH_SIZE);
-        let batch: Vec<_> = images.drain(..batch_size).collect();
-        let batch_meta = &meta[img_idx..img_idx + batch_size];
-        img_idx += batch_size;
+        for &page_idx in batch_pages {
+            let page = doc
+                .pages()
+                .get(page_idx as u16)
+                .with_context(|| format!("pdfium: page {page_idx} out of range"))?;
+
+            let page_h_pts = page.height().value;
+            let dynamic_img = page
+                .render_with_config(&render_config)
+                .context("pdfium: page render failed")?
+                .as_image();
+
+            let img_h_px = dynamic_img.height() as f32;
+            batch.push(dynamic_img.to_rgb8());
+            batch_meta.push((page_idx, page_h_pts, img_h_px));
+        }
 
         let outputs = ocr.predict(batch).context("OCR batch predict failed")?;
 
@@ -308,7 +308,7 @@ pub fn extract_headings_ocr(
 /// Render the given 0-based `page_indices` of the PDF at `dpi`, run OAR-OCR,
 /// and return **all** recognized text (not just headings).
 ///
-/// Unlike [`extract_headings_ocr`], this does not filter by bounding-box height
+/// Unlike [`extract_headings_ocr_direct`], this does not filter by bounding-box height
 /// — every region with confidence ≥ 0.4 is returned.
 pub fn extract_text_ocr(path: &Path, page_indices: &[u32], dpi: u32) -> Result<Vec<OcrPageResult>> {
     if page_indices.is_empty() {
@@ -323,37 +323,28 @@ pub fn extract_text_ocr(path: &Path, page_indices: &[u32], dpi: u32) -> Result<V
         .context("pdfium: failed to open PDF")?;
 
     let scale = dpi as f32 / 72.0;
+    let render_config = PdfRenderConfig::new().scale_page_by_factor(scale);
 
-    // Render pages to images.
-    let mut images = Vec::with_capacity(page_indices.len());
-    let mut meta: Vec<(u32, f32)> = Vec::with_capacity(page_indices.len());
-
-    for &page_idx in page_indices {
-        let page = doc
-            .pages()
-            .get(page_idx as u16)
-            .with_context(|| format!("pdfium: page {page_idx} out of range"))?;
-
-        let page_h_pts = page.height().value;
-        let render_config = PdfRenderConfig::new().scale_page_by_factor(scale);
-        let dynamic_img = page
-            .render_with_config(&render_config)
-            .context("pdfium: page render failed")?
-            .as_image();
-
-        images.push(dynamic_img.to_rgb8());
-        meta.push((page_idx, page_h_pts));
-    }
-
-    // Batch OCR.
     let mut page_results: Vec<OcrPageResult> = Vec::new();
-    let mut img_idx = 0;
+    for batch_pages in page_indices.chunks(BATCH_SIZE) {
+        let mut batch = Vec::with_capacity(batch_pages.len());
+        let mut batch_meta: Vec<(u32, f32)> = Vec::with_capacity(batch_pages.len());
 
-    while !images.is_empty() {
-        let batch_size = images.len().min(BATCH_SIZE);
-        let batch: Vec<_> = images.drain(..batch_size).collect();
-        let batch_meta = &meta[img_idx..img_idx + batch_size];
-        img_idx += batch_size;
+        for &page_idx in batch_pages {
+            let page = doc
+                .pages()
+                .get(page_idx as u16)
+                .with_context(|| format!("pdfium: page {page_idx} out of range"))?;
+
+            let page_h_pts = page.height().value;
+            let dynamic_img = page
+                .render_with_config(&render_config)
+                .context("pdfium: page render failed")?
+                .as_image();
+
+            batch.push(dynamic_img.to_rgb8());
+            batch_meta.push((page_idx, page_h_pts));
+        }
 
         let outputs = ocr.predict(batch).context("OCR batch predict failed")?;
 
@@ -397,4 +388,106 @@ pub fn extract_text_ocr(path: &Path, page_indices: &[u32], dpi: u32) -> Result<V
     }
 
     Ok(page_results)
+}
+
+// ---------------------------------------------------------------------------
+// Worker-routed public API (tries worker first, falls back to direct)
+// ---------------------------------------------------------------------------
+
+/// Run heading-focused OCR on the given 0-based `page_indices`.
+///
+/// If a persistent OCR worker is running (`arcane ocr start`), the request is
+/// forwarded to it so model-load cost is amortised across many calls.
+/// Falls back to running [`extract_headings_ocr_direct`] in-process when no
+/// worker is reachable.
+pub fn extract_headings_ocr(
+    path: &Path,
+    page_indices: &[u32],
+    dpi: u32,
+) -> Result<Vec<PositionedText>> {
+    let had_worker = super::worker::try_connect().is_some();
+
+    if !had_worker {
+        tracing::debug!("extract_headings_ocr: no running worker, starting temporary worker");
+        if let Err(e) = super::worker::cmd_start(Some(300)) {
+            tracing::warn!("extract_headings_ocr: temporary worker start failed: {e:#}");
+            return extract_headings_ocr_direct(path, page_indices, dpi);
+        }
+    }
+
+    let worker_result = match super::worker::try_extract_headings(path, page_indices, dpi) {
+        Some(result) => result,
+        None => {
+            if !had_worker {
+                let _ = super::worker::cmd_stop();
+            }
+            return extract_headings_ocr_direct(path, page_indices, dpi);
+        }
+    };
+
+    if !had_worker {
+        if let Err(e) = super::worker::cmd_stop() {
+            tracing::warn!("extract_headings_ocr: failed to stop temporary worker: {e:#}");
+        }
+    }
+
+    match worker_result {
+        Ok(results) => {
+            tracing::debug!("extract_headings_ocr: routed via worker");
+            Ok(results)
+        }
+        Err(e) => {
+            tracing::warn!("extract_headings_ocr: worker request failed, falling back to direct: {e:#}");
+            extract_headings_ocr_direct(path, page_indices, dpi)
+        }
+    }
+}
+
+/// Run full-text OCR on the given 0-based `page_indices`.
+///
+/// If a persistent OCR worker is running (`arcane ocr start`), the request is
+/// forwarded to it so model-load cost is amortised across many calls.
+/// Falls back to running [`extract_text_ocr_direct`] in-process when no
+/// worker is reachable.
+pub fn extract_text_ocr(
+    path: &Path,
+    page_indices: &[u32],
+    dpi: u32,
+) -> Result<Vec<OcrPageResult>> {
+    let had_worker = super::worker::try_connect().is_some();
+
+    if !had_worker {
+        tracing::debug!("extract_text_ocr: no running worker, starting temporary worker");
+        if let Err(e) = super::worker::cmd_start(Some(300)) {
+            tracing::warn!("extract_text_ocr: temporary worker start failed: {e:#}");
+            return extract_text_ocr_direct(path, page_indices, dpi);
+        }
+    }
+
+    let worker_result = match super::worker::try_extract_text(path, page_indices, dpi) {
+        Some(result) => result,
+        None => {
+            if !had_worker {
+                let _ = super::worker::cmd_stop();
+            }
+            return extract_text_ocr_direct(path, page_indices, dpi);
+        }
+    };
+
+    if !had_worker {
+        if let Err(e) = super::worker::cmd_stop() {
+            tracing::warn!("extract_text_ocr: failed to stop temporary worker: {e:#}");
+        }
+    }
+
+    match worker_result {
+        Ok(results) => {
+            tracing::debug!("extract_text_ocr: routed via worker");
+            Ok(results)
+        }
+        Err(e) => {
+            tracing::warn!("extract_text_ocr: worker request failed, falling back to direct: {e:#}");
+            extract_text_ocr_direct(path, page_indices, dpi)
+        }
+    }
 }
