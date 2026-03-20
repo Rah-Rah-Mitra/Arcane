@@ -1,17 +1,17 @@
 //! Frequency dictionary generation from the Tantivy index.
 //!
-//! Iterates over every term in the `body` field and sums up the total
-//! term frequency across all segments, producing a `word → count` map
-//! sorted by descending frequency.
+//! Iterates over every term in the `body` field for documents belonging
+//! to a specific project, producing a `word → count` map sorted by
+//! descending frequency.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::path::Path;
 
 use anyhow::{Context, Result};
 use tantivy::DocSet;
 
-use super::indexer::{SearchIndex, FIELD_BODY};
+use super::indexer::{SearchIndex, FIELD_BODY, FIELD_PROJECT};
 
 /// Entry in the frequency dictionary.
 #[derive(Debug)]
@@ -20,12 +20,12 @@ pub struct FreqEntry {
     pub count: u64,
 }
 
-/// Build a frequency dictionary from all indexed documents.
+/// Build a frequency dictionary from documents belonging to `project_name`.
 ///
-/// Walks every segment's inverted index for the `body` field and
-/// accumulates the total term frequency (sum of all occurrences across
-/// all documents) for each unique term.
-pub fn build_frequency_dict(index: &SearchIndex) -> Result<Vec<FreqEntry>> {
+/// For each segment, finds the set of doc IDs matching the project, then
+/// walks the `body` inverted index and sums term frequencies only for
+/// those documents.
+pub fn build_frequency_dict(index: &SearchIndex, project_name: &str) -> Result<Vec<FreqEntry>> {
     let reader = index
         .index()
         .reader()
@@ -33,63 +33,56 @@ pub fn build_frequency_dict(index: &SearchIndex) -> Result<Vec<FreqEntry>> {
 
     let searcher = reader.searcher();
     let body_field = index.schema().get_field(FIELD_BODY).unwrap();
+    let project_field = index.schema().get_field(FIELD_PROJECT).unwrap();
+    let project_term = tantivy::Term::from_field_text(project_field, project_name);
 
     let mut freq_map: HashMap<String, u64> = HashMap::new();
 
     for segment_reader in searcher.segment_readers() {
-        let inverted_index = segment_reader.inverted_index(body_field)?;
-        let mut term_stream = inverted_index.terms().stream()?;
-
-        while term_stream.advance() {
-            let term_bytes = term_stream.key();
-            // Tantivy text terms are UTF-8 encoded.
-            if let Ok(term_str) = std::str::from_utf8(term_bytes) {
-                let term_info = term_stream.value();
-                let doc_freq = term_info.doc_freq as u64;
-                // doc_freq is the number of documents containing this term.
-                // For a closer approximation of total occurrences, we use
-                // the postings list to sum per-document term frequencies.
-                *freq_map.entry(term_str.to_string()).or_insert(0) += doc_freq;
+        // Build the set of doc IDs that belong to this project.
+        let project_index = segment_reader.inverted_index(project_field)?;
+        let mut project_docs = HashSet::new();
+        if let Some(mut postings) = project_index.read_postings(
+            &project_term,
+            tantivy::schema::IndexRecordOption::Basic,
+        )? {
+            while postings.advance() != tantivy::TERMINATED {
+                project_docs.insert(postings.doc());
             }
         }
-    }
 
-    // Try to get actual term frequencies by walking postings if available.
-    // Tantivy's TermInfo gives doc_freq but not total_term_freq directly
-    // from the stream. We re-walk with postings for accurate counts.
-    let mut accurate_map: HashMap<String, u64> = HashMap::new();
+        if project_docs.is_empty() {
+            continue;
+        }
 
-    for segment_reader in searcher.segment_readers() {
-        let inverted_index = segment_reader.inverted_index(body_field)?;
-        let mut term_stream = inverted_index.terms().stream()?;
+        // Walk every term in the body field, summing frequencies only for
+        // documents in the project set.
+        let body_index = segment_reader.inverted_index(body_field)?;
+        let mut term_stream = body_index.terms().stream()?;
 
         while term_stream.advance() {
             let term_bytes = term_stream.key();
             if let Ok(term_str) = std::str::from_utf8(term_bytes) {
                 let term = tantivy::Term::from_field_text(body_field, term_str);
-                if let Some(postings) = inverted_index
+                if let Some(mut postings) = body_index
                     .read_postings(&term, tantivy::schema::IndexRecordOption::WithFreqs)?
                 {
                     use tantivy::postings::Postings as _;
-                    let mut postings = postings;
                     let mut total = 0u64;
                     while postings.advance() != tantivy::TERMINATED {
-                        total += postings.term_freq() as u64;
+                        if project_docs.contains(&postings.doc()) {
+                            total += postings.term_freq() as u64;
+                        }
                     }
-                    *accurate_map.entry(term_str.to_string()).or_insert(0) += total;
+                    if total > 0 {
+                        *freq_map.entry(term_str.to_string()).or_insert(0) += total;
+                    }
                 }
             }
         }
     }
 
-    // Prefer accurate counts; fall back to doc_freq if postings unavailable.
-    let final_map = if accurate_map.is_empty() {
-        freq_map
-    } else {
-        accurate_map
-    };
-
-    let mut entries: Vec<FreqEntry> = final_map
+    let mut entries: Vec<FreqEntry> = freq_map
         .into_iter()
         .map(|(term, count)| FreqEntry { term, count })
         .collect();

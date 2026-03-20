@@ -128,7 +128,7 @@ Chapter PDFs are written to `~/Arcane/Library/<Project>/Chunks/<Source>/`.
 | `arcane rotate <input> [--degrees N] [--output PATH] [--pages P…]` | Rotate PDF pages. `--degrees` default: 90 (must be multiple of 90). `--pages`: 0-based indices; if omitted, all pages rotated |
 | `arcane protect <input> --password P [--output PATH]` | Encrypt a PDF with a password. Overwrites input if `--output` omitted |
 | `arcane unlock <input> --password P [--output PATH]` | Decrypt a password-protected PDF. Overwrites input if `--output` omitted |
-| `arcane freq [--output PATH] [--limit N]` | Generate a frequency dictionary from the search index. `--output` default: freq.txt. `--limit`: max entries (0 = all) |
+| `arcane freq <project> [--output PATH] [--limit N]` | Generate a frequency dictionary for a project. Output defaults to `~/Arcane/Library/<project>/freq.txt`. `--limit`: max entries (0 = all) |
 | `arcane watch <project>` | Watch a project directory for new PDFs |
 | `arcane tui` | Launch the interactive terminal UI |
 

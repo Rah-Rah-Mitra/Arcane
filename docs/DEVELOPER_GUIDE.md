@@ -138,7 +138,7 @@ The CLI layer uses `clap` derive macros for declarative command definitions in `
 - `cmd_tag()` / `cmd_untag()`: Tag management
 - `cmd_merge()` / `cmd_split()` / `cmd_rotate()`: Structural PDF operations
 - `cmd_protect()` / `cmd_unlock()`: PDF encryption
-- `cmd_freq()`: Generates a frequency dictionary from the search index
+- `cmd_freq()`: Generates a per-project frequency dictionary from the search index
 - `cmd_watch()`: File system watcher
 - `cmd_tui()`: Interactive terminal UI
 

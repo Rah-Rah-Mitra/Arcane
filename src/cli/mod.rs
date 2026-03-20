@@ -164,15 +164,18 @@ pub enum Commands {
     /// Rebuild the full-text search index from all sources.
     Reindex,
 
-    /// Generate a frequency dictionary from the search index.
+    /// Generate a frequency dictionary for a project.
     ///
-    /// Iterates over every indexed term and outputs `word count` pairs
-    /// sorted by descending frequency.  The output file can be used as a
-    /// corpus-level word frequency list.
+    /// Iterates over every indexed term belonging to the project and
+    /// outputs `word count` pairs sorted by descending frequency.
+    /// The file is written into the project directory by default.
     Freq {
-        /// Output file path (default: freq.txt in current directory).
-        #[arg(default_value = "freq.txt")]
-        output: PathBuf,
+        /// Project name.
+        project: String,
+
+        /// Output file path (default: freq.txt in the project directory).
+        #[arg(long)]
+        output: Option<PathBuf>,
 
         /// Maximum number of entries to include (0 = unlimited).
         #[arg(long, default_value_t = 0)]

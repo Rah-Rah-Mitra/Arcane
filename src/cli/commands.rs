@@ -103,6 +103,22 @@ pub fn cmd_show(name: &str) -> Result<()> {
             }
         }
     }
+
+    // Show frequency dictionary if it exists.
+    let freq_path = storage::filesystem::project_dir(name)?.join("freq.txt");
+    if freq_path.exists() {
+        let meta = std::fs::metadata(&freq_path)?;
+        let lines = std::fs::read_to_string(&freq_path)?
+            .lines()
+            .count();
+        println!(
+            "Freq    : {} ({} terms, {} bytes)",
+            freq_path.display(),
+            lines,
+            meta.len()
+        );
+    }
+
     Ok(())
 }
 
@@ -1142,12 +1158,22 @@ pub fn cmd_search(
     Ok(())
 }
 
-pub fn cmd_freq(output: std::path::PathBuf, limit: usize) -> Result<()> {
+pub fn cmd_freq(
+    project_name: &str,
+    output: Option<std::path::PathBuf>,
+    limit: usize,
+) -> Result<()> {
+    // Verify the project exists.
+    let store = ProjectStore::load()?;
+    let _project = store
+        .get(project_name)
+        .with_context(|| format!("project '{project_name}' not found"))?;
+
     let idx = SearchIndex::open_or_create()?;
-    let entries = crate::search::freq::build_frequency_dict(&idx)?;
+    let entries = crate::search::freq::build_frequency_dict(&idx, project_name)?;
 
     if entries.is_empty() {
-        println!("[arcane] Index is empty — nothing to export.");
+        println!("[arcane] No indexed content for project '{project_name}' — nothing to export.");
         return Ok(());
     }
 
@@ -1157,12 +1183,23 @@ pub fn cmd_freq(output: std::path::PathBuf, limit: usize) -> Result<()> {
         &entries
     };
 
-    crate::search::freq::write_freq_file(slice, &output)?;
+    // Default output: <project_dir>/freq.txt
+    let output_path = match output {
+        Some(p) => p,
+        None => storage::filesystem::project_dir(project_name)?.join("freq.txt"),
+    };
+
+    // Ensure parent directory exists.
+    if let Some(parent) = output_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    crate::search::freq::write_freq_file(slice, &output_path)?;
 
     println!(
         "[arcane] Wrote {} entries to {}",
         slice.len(),
-        output.display()
+        output_path.display()
     );
     Ok(())
 }

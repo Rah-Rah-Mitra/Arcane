@@ -118,7 +118,7 @@ fn main() -> anyhow::Result<()> {
             source,
         } => commands::cmd_search(&query, limit, project.as_deref(), source.as_deref()),
         Commands::Reindex => commands::cmd_reindex(),
-        Commands::Freq { output, limit } => commands::cmd_freq(output, limit),
+        Commands::Freq { project, output, limit } => commands::cmd_freq(&project, output, limit),
         Commands::Tui => commands::cmd_tui(),
         Commands::Watch { project } => commands::cmd_watch(&project),
         Commands::Probe { file, json } => commands::cmd_probe(file, json),
