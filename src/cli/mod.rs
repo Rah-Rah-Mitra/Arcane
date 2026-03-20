@@ -164,6 +164,21 @@ pub enum Commands {
     /// Rebuild the full-text search index from all sources.
     Reindex,
 
+    /// Generate a frequency dictionary from the search index.
+    ///
+    /// Iterates over every indexed term and outputs `word count` pairs
+    /// sorted by descending frequency.  The output file can be used as a
+    /// corpus-level word frequency list.
+    Freq {
+        /// Output file path (default: freq.txt in current directory).
+        #[arg(default_value = "freq.txt")]
+        output: PathBuf,
+
+        /// Maximum number of entries to include (0 = unlimited).
+        #[arg(long, default_value_t = 0)]
+        limit: usize,
+    },
+
     /// Launch the interactive terminal UI.
     Tui,
 
@@ -278,27 +293,6 @@ pub enum Commands {
         #[arg(long, default_value_t = 5)]
         seed_tolerance: u32,
 
-        /// Force OCR-based TOC reconstruction.  Reads the specified TOC pages
-        /// via OCR, parses structured entries (title + page number), reconstructs
-        /// hierarchy, and injects bookmarks.  Requires `--features ocr` build
-        /// and `arcane init-ocr`.
-        #[arg(long)]
-        ocr: bool,
-
-        /// OCR render DPI (default 150).  Higher = more accurate but slower.
-        /// Only used with `--ocr`.
-        #[arg(long, default_value_t = 150)]
-        ocr_dpi: u32,
-
-        /// OCR language hint (default: en).  Reserved for future multi-language
-        /// model support.
-        #[arg(long, default_value = "en")]
-        ocr_lang: String,
-
-        /// OCR model variant name.  Reserved for future model selection.
-        #[arg(long)]
-        ocr_model: Option<String>,
-
         /// First TOC page (1-based).  Alternative to `--toc-pages` range string.
         #[arg(long)]
         toc_start_page: Option<u32>,
@@ -306,16 +300,6 @@ pub enum Commands {
         /// Last TOC page (1-based).  Alternative to `--toc-pages` range string.
         #[arg(long)]
         toc_end_page: Option<u32>,
-
-        /// Emit intermediate OCR layout blocks (with bounding boxes and
-        /// confidence scores) to stderr for debugging.
-        #[arg(long)]
-        debug_layout: bool,
-
-        /// Manual page offset override.  Skips automatic offset estimation.
-        /// Accepts negative values (e.g. `--page-offset -3`).
-        #[arg(long, allow_hyphen_values = true)]
-        page_offset: Option<i32>,
     },
 
     /// Show the outline (bookmarks) and page labels of a PDF file.
@@ -378,32 +362,6 @@ pub enum Commands {
         output: Option<PathBuf>,
     },
 
-    /// Download OCR model files and runtime libraries to ~/Arcane/models/.
-    ///
-    /// Downloads PaddleOCR v5 models, ONNX Runtime, and PDFium for the
-    /// current platform.  After this command, `arcane recover-outline` will
-    /// auto-detect the models — no environment variables needed.
-    InitOcr {
-        /// Override the models directory (default: ~/Arcane/models/).
-        #[arg(long)]
-        models_dir: Option<PathBuf>,
-
-        /// Skip downloading runtime libraries (onnxruntime, pdfium).
-        #[arg(long)]
-        skip_runtime: bool,
-
-        /// Force re-download even if files already exist.
-        #[arg(long)]
-        force: bool,
-    },
-
-    /// OCR operations — run OCR on PDF pages or manage the background OCR worker.
-    ///
-    /// Requires `cargo build --features ocr` and `arcane init-ocr`.
-    Ocr {
-        #[command(subcommand)]
-        cmd: OcrCommand,
-    },
 
     /// Correlate detected chapter headings with TOC entries to find the
     /// physical-to-logical page offset.
@@ -428,68 +386,4 @@ pub enum Commands {
         json: bool,
     },
 
-    /// Internal: run the OCR worker server loop (not intended for direct use).
-    #[command(hide = true)]
-    WorkerServe {
-        /// Seconds of inactivity before the worker shuts itself down.
-        #[arg(long)]
-        idle_timeout_secs: Option<u64>,
-    },
-}
-
-/// OCR sub-commands, invoked as `arcane ocr <sub-command>`.
-#[derive(Subcommand)]
-pub enum OcrCommand {
-    /// Initialise OCR runtime by validating models and warming the worker.
-    ///
-    /// If no worker is running, this command starts one, verifies it is
-    /// responsive, and stops it immediately.
-    Init,
-
-    /// Run OCR on a page range and output the recognised text.
-    ///
-    /// If a persistent OCR worker is running (`arcane ocr start`), the
-    /// request is routed to it so the ~5 s model-load cost is only paid once.
-    /// Requires `cargo build --features ocr` and `arcane init-ocr`.
-    Run {
-        /// Path to the PDF file.
-        file: PathBuf,
-
-        /// Page range to OCR (1-based, e.g. "1-5" or "14-20").
-        #[arg(long)]
-        pages: String,
-
-        /// Render DPI (higher = more accurate but slower).
-        #[arg(long, default_value_t = 150)]
-        dpi: u32,
-
-        /// Output as JSON (includes coordinates and confidence scores).
-        #[arg(long)]
-        json: bool,
-    },
-
-    /// Start the persistent OCR worker in the background.
-    ///
-    /// Loads ONNX Runtime and PaddleOCR models once, then serves requests
-    /// from `arcane ocr run` and pipeline commands (e.g. `recover-outline`)
-    /// via a TCP loopback socket — eliminating the ~5 s model-load overhead
-    /// on every call.  Requires `cargo build --features ocr` and `arcane init-ocr`.
-    Start {
-        /// Shut the worker down automatically after N seconds of inactivity.
-        #[arg(long)]
-        idle_timeout_secs: Option<u64>,
-    },
-
-    /// Stop the running OCR worker gracefully.
-    Stop,
-
-    /// Show the status of the OCR worker (running state, PID, port, uptime).
-    Status,
-
-    /// Restart the OCR worker (stops if running, then starts fresh).
-    Restart {
-        /// Shut the worker down automatically after N seconds of inactivity.
-        #[arg(long)]
-        idle_timeout_secs: Option<u64>,
-    },
 }

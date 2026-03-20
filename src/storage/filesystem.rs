@@ -41,17 +41,6 @@ pub fn originals_dir(project_name: &str) -> Result<PathBuf> {
     Ok(dir)
 }
 
-/// Returns `~/Arcane/models/` (created on demand).
-///
-/// Used by `init-ocr` to store downloaded OCR model files, and by
-/// `ocr.rs` to resolve model paths at runtime.
-pub fn models_dir() -> Result<PathBuf> {
-    let dir = arcane_root()?.join("models");
-    fs::create_dir_all(&dir)
-        .with_context(|| format!("failed to create models directory at {}", dir.display()))?;
-    Ok(dir)
-}
-
 /// Returns `~/Arcane/Library/[project_name]/Chunks` (created on demand).
 pub fn chunks_dir(project_name: &str) -> Result<PathBuf> {
     let dir = project_dir(project_name)?.join("Chunks");
@@ -95,18 +84,6 @@ pub(crate) fn dirs_home() -> Result<PathBuf> {
         return Ok(PathBuf::from(h));
     }
     anyhow::bail!("cannot determine home directory — neither HOME nor USERPROFILE is set")
-}
-
-/// Returns the path to `~/Arcane/ocr-worker.json` — the worker runtime
-/// state file written by the background worker on startup.
-pub fn worker_state_path() -> Result<PathBuf> {
-    Ok(arcane_root()?.join("ocr-worker.json"))
-}
-
-/// Returns the path to `~/Arcane/ocr-worker.log` — stdout/stderr of the
-/// background worker process.
-pub fn worker_log_path() -> Result<PathBuf> {
-    Ok(arcane_root()?.join("ocr-worker.log"))
 }
 
 // ---------------------------------------------------------------------------

@@ -46,51 +46,12 @@ cargo build --release
 # The binary will be at target/release/arcane
 ```
 
-### Building with OCR Support (Optional)
-
-For PDFs with broken font encoding, Arcane can fall back to image-based OCR:
-
-```bash
-cargo build --release --features ocr
-```
-
-Then download all required models and runtime libraries:
-
-```bash
-arcane init-ocr
-```
-
-This downloads PaddleOCR v5 models, ONNX Runtime, and PDFium to `~/Arcane/models/`.
-Everything is auto-detected at runtime — no environment variables needed.
-
-Options:
-- `--force` — re-download even if files exist
-- `--skip-runtime` — skip ONNX Runtime and PDFium (only download models)
-- `--models-dir <path>` — override the download directory
-
-#### Advanced: Manual Path Overrides
-
-For non-English PDFs or custom model locations, set these environment variables:
-
-| Variable | Purpose |
-|----------|---------|
-| `ARCANE_OCR_DET_MODEL` | Detection ONNX model |
-| `ARCANE_OCR_REC_MODEL` | Recognition ONNX model (e.g. Chinese) |
-| `ARCANE_OCR_DICT` | Recognition dictionary |
-| `ORT_DYLIB_PATH` | ONNX Runtime shared library |
-
 ### Installing Locally
 
 To install Arcane so you can use it from anywhere:
 
 ```bash
 cargo install --path .
-```
-
-To install with OCR support enabled:
-
-```bash
-cargo install --path . --force --features ocr
 ```
 
 This will install the `arcane` command in your Cargo bin directory (usually `~/.cargo/bin/`), which should be in your PATH.
@@ -419,7 +380,7 @@ Has outlines: no
 Page labels:  yes
 ```
 
-This is the first step in understanding whether a PDF needs outline recovery, OCR, or is already well-structured.
+This is the first step in understanding whether a PDF needs outline recovery or is already well-structured.
 
 ### `arcane detect-layout <file> [--json] [--pages RANGE]`
 
@@ -560,14 +521,8 @@ Recovers and injects outline bookmarks into PDFs that have no `/Outlines`, using
 - `--seed-pdf PATH`: Path to a reference PDF whose `/Outlines` provide ground-truth chapter titles (see [Seeded Recovery](#seeded-outline-recovery) below)
 - `--seed-file PATH`: Path to a JSON file with known chapter titles and page numbers (alternative to `--seed-pdf`)
 - `--seed-tolerance N`: ±N page search window when locating seed titles in the target PDF (default: 5)
-- `--ocr`: Force OCR-based TOC reconstruction (reads TOC pages via OCR instead of font heuristics). Requires `--features ocr` build and `arcane init-ocr`
-- `--ocr-dpi N`: Render resolution for OCR (default: 150). Higher = more accurate but slower
-- `--ocr-lang LANG`: OCR language hint (default: en). Reserved for future multi-language support
-- `--ocr-model NAME`: OCR model variant. Reserved for future model selection
 - `--toc-start-page N`: First TOC page (1-based). Alternative to `--toc-pages` range string
 - `--toc-end-page N`: Last TOC page (1-based). Alternative to `--toc-pages` range string
-- `--debug-layout`: Emit intermediate OCR blocks with bounding boxes and confidence to stderr (for debugging)
-- `--page-offset N`: Manual page offset override (skips automatic estimation). Accepts negative values
 
 **Workflow:**
 ```bash
@@ -599,7 +554,7 @@ arcane chunk  "Project" --source "Book Title" --depth 1
 ```
 
 **Tips:**
-- Use `arcane probe` first to confirm the PDF is text-based (scanned PDFs require the `--features ocr` build)
+- Use `arcane probe` first to confirm the PDF is text-based
 - Increase `--min-font-ratio` (e.g. to 1.4) if too many section headings are detected
 - Use `--depth 1` for chapter-level chunks only; `--depth 2` splits at section level too
 - The `--toc-pages` flag provides ~40% speedup and 100% deterministic matching when you know where the TOC is
@@ -622,11 +577,11 @@ arcane recover-outline "broken-copy.pdf" \
 The seeded pipeline:
 1. Extracts the outline from the reference PDF (titles + physical page numbers + depth levels)
 2. Calculates the page offset between the two PDFs using a vote-based consensus algorithm
-3. Verifies each seed title against the target PDF's page text (via OCR if compiled, or text extraction)
+3. Verifies each seed title against the target PDF's page text via text extraction
 4. Injects the verified outline with correct titles and page destinations
 
 Each seed entry is reported as one of:
-- **OK** — title was confirmed on the target page (text or OCR match ≥ threshold)
+- **OK** — title was confirmed on the target page (text match ≥ threshold)
 - **EST** — title could not be confirmed (garbled text); the page number is estimated from the offset
 - **OOR** — the computed target page is outside the document's page range
 
@@ -652,130 +607,6 @@ If you don't have a reference PDF, you can create a JSON seed file manually:
 ```
 
 Then use `--seed-file seeds.json` instead of `--seed-pdf`. Pages are 1-based (matching `arcane outline` display). The `depth` field is optional and defaults to 1.
-
-### `arcane ocr run <file> --pages <RANGE> [--dpi N] [--json]`
-
-Runs OCR on a page range of any PDF and outputs the recognised text. Requires a build with OCR support (`--features ocr`) and models downloaded via `arcane init-ocr`.
-
-If a persistent worker is running (`arcane ocr start`), requests reuse the preloaded models for lower latency. If no worker is running, Arcane auto-starts a temporary worker for the command and stops it when done.
-
-**Options:**
-- `--pages RANGE`: Page range to OCR (1-based, e.g. "1-5" or "14-20") — **required**
-- `--dpi N`: Render resolution in dots per inch (default: 150). Higher values improve accuracy at the cost of speed and memory
-- `--json`: Output structured JSON with coordinates, font sizes, and confidence scores for each text region
-
-**Examples:**
-
-Read the table of contents from a scanned book:
-```bash
-arcane ocr run ~/Books/scanned-book.pdf --pages "5-8"
-```
-
-Extract text from specific pages at higher resolution:
-```bash
-arcane ocr run ~/Books/textbook.pdf --pages "14-20" --dpi 300
-```
-
-Get structured OCR output for scripting:
-```bash
-arcane ocr run ~/Books/textbook.pdf --pages "1-3" --json
-```
-
-**Human-readable output:**
-```
---- Page 14 ---
-Contents
-1 Introduction 1
-2 Sorting Algorithms 15
-3 Graph Theory 42
-...
-
---- Page 15 ---
-4 Dynamic Programming 78
-5 Greedy Algorithms 102
-...
-```
-
-**JSON output** includes per-region detail:
-```json
-[
-  {
-    "page_index": 13,
-    "regions": [
-      {"text": "Contents", "confidence": 0.98, "x": 200.0, "y": 650.0, "font_size": 24.0},
-      {"text": "1 Introduction 1", "confidence": 0.95, "x": 100.0, "y": 600.0, "font_size": 12.0}
-    ]
-  }
-]
-```
-
-**Tips:**
-- Use 150 DPI (the default) for speed; increase to 200–300 DPI for small or dense text
-- Pipe `--json` output to `jq` for filtering: `arcane ocr run book.pdf --pages "1-3" --json | jq '.[].regions[].text'`
-- For repeated OCR-heavy workflows, run `arcane ocr start` first and stop with `arcane ocr stop` when done
-- Combine with `recover-outline --seed-file` to manually build an outline from OCR'd TOC pages
-
-### `arcane ocr init`
-
-Warms and validates OCR runtime by starting a worker, checking that models/runtime load successfully, then stopping it.
-
-```bash
-arcane ocr init
-```
-
-### `arcane ocr start [--idle-timeout-secs N]`
-
-Starts a persistent OCR worker process in the background. Use this when running many OCR commands to avoid repeated model-load overhead.
-
-```bash
-arcane ocr start
-arcane ocr start --idle-timeout-secs 900
-```
-
-### `arcane ocr status`
-
-Shows whether the worker is running, plus PID, port, uptime, and request count.
-
-```bash
-arcane ocr status
-```
-
-### `arcane ocr stop`
-
-Stops the persistent OCR worker gracefully.
-
-```bash
-arcane ocr stop
-```
-
-### `arcane ocr restart [--idle-timeout-secs N]`
-
-Stops the current worker (if running) and starts a new one.
-
-```bash
-arcane ocr restart
-```
-
-### `arcane init-ocr [--models-dir DIR] [--skip-runtime] [--force]`
-
-Downloads all OCR model files and runtime libraries (ONNX Runtime, PDFium) for the current platform to `~/Arcane/models/`. Files are auto-detected at runtime — no environment variables needed.
-
-**Options:**
-- `--models-dir DIR`: Override the download directory (default: `~/Arcane/models/`)
-- `--skip-runtime`: Only download model files, skip ONNX Runtime and PDFium DLLs
-- `--force`: Re-download files even if they already exist
-
-**Example:**
-```bash
-# Download everything (first-time setup)
-arcane init-ocr
-
-# Force re-download
-arcane init-ocr --force
-
-# Models only (you already have ONNX Runtime and PDFium)
-arcane init-ocr --skip-runtime
-```
 
 ### `arcane merge <output> <inputs…>`
 
@@ -976,7 +807,6 @@ Arcane includes a full pipeline for analysing and recovering the structure of PD
 ```
 arcane probe book.pdf                  # Step 1: Is it text-based or scanned?
 arcane detect-layout book.pdf          # Step 2: What headings / font distribution does it have?
-arcane ocr run book.pdf --pages "5-8"  # Step 2 alt: Read pages via OCR (for scanned/garbled PDFs)
 arcane sync-pages book.pdf             # Step 3: Find the physical↔printed page offset (RANSAC)
 arcane find-offset book.pdf            # Step 3 alt: Simpler offset detection (PageLabels / TOC)
 arcane recover-outline book.pdf        # Step 4: Inject recovered bookmarks into the PDF
@@ -1035,22 +865,19 @@ arcane recover-outline ~/Books/vision-garbled.pdf \
 arcane outline ~/Books/vision-fixed.pdf
 ```
 
-### Workflow: Building an Outline from OCR'd TOC Pages
+### Workflow: Building an Outline from a Seed File
 
-When there is no reference copy, you can OCR the table-of-contents pages and manually create a seed file:
+When there is no reference copy, you can manually create a seed file with known chapter titles and page numbers:
+
+```json
+[
+  {"title": "1 Introduction", "page": 1},
+  {"title": "2 Sorting Algorithms", "page": 15},
+  {"title": "3 Graph Theory", "page": 42}
+]
+```
 
 ```bash
-# OCR the TOC pages (requires --features ocr build + arcane init-ocr)
-arcane ocr run ~/Books/textbook.pdf --pages "5-8"
-
-# From the OCR output, create a JSON seed file with the chapter titles and pages:
-# seeds.json:
-# [
-#   {"title": "1 Introduction", "page": 1},
-#   {"title": "2 Sorting Algorithms", "page": 15},
-#   {"title": "3 Graph Theory", "page": 42}
-# ]
-
 # Use the seed file to inject the outline
 arcane recover-outline ~/Books/textbook.pdf \
   --seed-file seeds.json \
@@ -1060,47 +887,6 @@ arcane recover-outline ~/Books/textbook.pdf \
 # Verify
 arcane outline ~/Books/textbook-fixed.pdf
 ```
-
-### Workflow: OCR-Based TOC Recovery (Automatic)
-
-When you have a scanned PDF and want to automatically reconstruct the outline
-from its Table of Contents pages without manually creating a seed file:
-
-```bash
-# 1. Classify the PDF — confirm it's scanned or has broken encoding
-arcane probe ~/Books/scanned-textbook.pdf
-
-# 2. Preview what the OCR pipeline detects on the TOC pages
-#    (You need to know which pages contain the Table of Contents)
-arcane recover-outline ~/Books/scanned-textbook.pdf \
-  --ocr --toc-pages 5-10 --dry-run
-
-# 3. If the output looks good, inject the bookmarks
-arcane recover-outline ~/Books/scanned-textbook.pdf \
-  --ocr --toc-pages 5-10 \
-  --output ~/Books/scanned-textbook-fixed.pdf
-
-# 4. If page numbers are wrong, override the offset manually
-#    (e.g., if printed "page 1" is at physical page 15, offset = 14)
-arcane recover-outline ~/Books/scanned-textbook.pdf \
-  --ocr --toc-pages 5-10 --page-offset 14 \
-  --output ~/Books/scanned-textbook-fixed.pdf
-
-# 5. Verify the result
-arcane outline ~/Books/scanned-textbook-fixed.pdf --depth 3
-
-# 6. Add to your project and chunk
-arcane add "Project" ~/Books/scanned-textbook-fixed.pdf --textbook
-arcane chunk "Project" --depth 1
-```
-
-**Tips for OCR recovery:**
-- Always use `--dry-run` first to verify detected entries before writing
-- Use `--debug-layout 2>layout.json` to inspect the raw OCR output if entries are missing
-- Increase `--ocr-dpi` to 200-300 if text is small or the scan quality is low
-- Start the OCR worker first (`arcane ocr start`) for faster repeated invocations
-- If the automatic page offset is wrong, use `--page-offset N` to override it
-- The pipeline handles roman numeral front matter (i, ii, iii...) separately from arabic body pages
 
 ### Understanding `body_font_size`
 
@@ -1212,7 +998,7 @@ This will:
 
 4. **Outline depth too shallow**: The PDF may have chapters at a deeper outline level. Try `--depth 2` or `--depth 3`.
 
-5. **The PDF is a scanned image**: Use `arcane probe <file>` to check. If the PDF is scanned (image-only), build with `--features ocr` to enable OCR-based text recognition (see [Building with OCR Support](#building-with-ocr-support-optional) above).
+5. **The PDF is a scanned image**: Use `arcane probe <file>` to check. If the PDF is scanned (image-only), outline recovery requires text-based content. You would need to use an external tool to convert it to a text-based PDF first.
 
 **Solution:**
 ```bash
@@ -1261,29 +1047,6 @@ chmod -R u+w ~/Arcane/
 ### Windows: Symlinks not working
 
 On Windows, Arcane will automatically fall back to copying files if symlink creation fails. This means your PDFs will be duplicated rather than linked.
-
-### OCR recovery finds no entries or wrong entries
-
-**Possible causes:**
-
-1. **Wrong TOC pages**: The `--toc-pages` range doesn't cover the actual Table of Contents.
-   Use `arcane ocr run book.pdf --pages "1-15"` to read the first pages and find where the TOC is.
-
-2. **Low scan quality**: Increase DPI with `--ocr-dpi 200` or `--ocr-dpi 300`.
-
-3. **Non-English text**: Set `--ocr-lang` to the correct language code (requires appropriate model).
-
-4. **Wrong page offset**: The automatic offset estimation may fail if very few TOC entries
-   match the document text. Use `--page-offset N` to set it manually.
-
-**Debugging:**
-```bash
-# See exactly what the OCR reads on each TOC page
-arcane ocr run book.pdf --pages "5-10" --json
-
-# See the intermediate OCR layout with bounding boxes
-arcane recover-outline book.pdf --ocr --toc-pages 5-10 --debug-layout --dry-run 2>layout.json
-```
 
 ## Tips and Best Practices
 

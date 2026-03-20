@@ -3,7 +3,7 @@
 //! Inspects each page's content stream for text-showing operators (`Tj`, `TJ`,
 //! `'`, `"`) and image-placing operators (`Do` referencing an XObject with
 //! `/Subtype /Image`).  This allows the recovery pipeline to route text-based
-//! PDFs through fast heuristic extraction and flag scanned PDFs for OCR.
+//! PDFs through fast heuristic extraction and flag scanned PDFs.
 
 use lopdf::{Document, Object, ObjectId};
 use serde::{Deserialize, Serialize};

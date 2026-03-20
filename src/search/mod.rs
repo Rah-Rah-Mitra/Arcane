@@ -3,6 +3,7 @@
 //! Uses tantivy to provide full-text search across all projects and sources.
 //! The index is stored at `~/Arcane/search_index/`.
 
+pub mod freq;
 pub mod indexer;
 pub mod query;
 

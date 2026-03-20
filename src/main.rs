@@ -77,14 +77,8 @@ fn main() -> anyhow::Result<()> {
             seed_pdf,
             seed_file,
             seed_tolerance,
-            ocr,
-            ocr_dpi,
-            ocr_lang,
-            ocr_model,
             toc_start_page,
             toc_end_page,
-            debug_layout,
-            page_offset,
         } => commands::cmd_recover_outline(
             file,
             output,
@@ -98,14 +92,8 @@ fn main() -> anyhow::Result<()> {
             seed_pdf,
             seed_file,
             seed_tolerance,
-            ocr,
-            ocr_dpi,
-            ocr_lang,
-            ocr_model,
             toc_start_page,
             toc_end_page,
-            debug_layout,
-            page_offset,
         ),
         Commands::Outline { file, depth } => commands::cmd_outline(file, depth),
         Commands::Remove { project, source } => commands::cmd_remove(&project, source.as_deref()),
@@ -130,6 +118,7 @@ fn main() -> anyhow::Result<()> {
             source,
         } => commands::cmd_search(&query, limit, project.as_deref(), source.as_deref()),
         Commands::Reindex => commands::cmd_reindex(),
+        Commands::Freq { output, limit } => commands::cmd_freq(output, limit),
         Commands::Tui => commands::cmd_tui(),
         Commands::Watch { project } => commands::cmd_watch(&project),
         Commands::Probe { file, json } => commands::cmd_probe(file, json),
@@ -157,28 +146,5 @@ fn main() -> anyhow::Result<()> {
             threshold,
             json,
         } => commands::cmd_sync_pages(file, toc_pages, threshold, json),
-        Commands::Ocr { cmd } => {
-            use cli::OcrCommand::*;
-            match cmd {
-                Init => commands::cmd_ocr_worker_init(),
-                Run { file, pages, dpi, json } => commands::cmd_ocr(file, pages, dpi, json),
-                Start { idle_timeout_secs } => {
-                    commands::cmd_ocr_worker_start(idle_timeout_secs)
-                }
-                Stop => commands::cmd_ocr_worker_stop(),
-                Status => commands::cmd_ocr_worker_status(),
-                Restart { idle_timeout_secs } => {
-                    commands::cmd_ocr_worker_restart(idle_timeout_secs)
-                }
-            }
-        }
-        Commands::InitOcr {
-            models_dir,
-            skip_runtime,
-            force,
-        } => commands::cmd_init_ocr(models_dir, skip_runtime, force),
-        Commands::WorkerServe { idle_timeout_secs } => {
-            commands::cmd_worker_serve(idle_timeout_secs)
-        }
     }
 }

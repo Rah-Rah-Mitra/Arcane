@@ -1079,14 +1079,14 @@ fn is_toc_entry(text: &str) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// Pixel-density stubs (Scanned Tier — deferred to OCR milestone)
+// Pixel-density stubs (Scanned Tier — deferred to future milestone)
 // ---------------------------------------------------------------------------
 
 /// (Stub) Estimate font weight from the black-pixel ratio in a bounding box.
 ///
 /// Bold text: ratio ≈ 0.15–0.25; regular text: ≈ 0.08–0.12.
-/// Requires image data extracted from XObject streams.  Deferred to the
-/// OCR integration milestone.
+/// Requires image data extracted from XObject streams.  Deferred to a
+/// future milestone.
 #[allow(dead_code)]
 pub fn estimate_weight_from_pixel_density(_image: &[u8], _bbox: (f32, f32, f32, f32)) -> u16 {
     400
@@ -1095,7 +1095,7 @@ pub fn estimate_weight_from_pixel_density(_image: &[u8], _bbox: (f32, f32, f32, 
 /// (Stub) Detect italic text via Horizontal Projection Profile.
 ///
 /// Italic text produces a slanted "sawtooth" pattern in column-wise black
-/// pixel sums.  Deferred to the OCR integration milestone.
+/// pixel sums.  Deferred to a future milestone.
 #[allow(dead_code)]
 pub fn detect_italic_hpp(_image: &[u8], _bbox: (f32, f32, f32, f32)) -> bool {
     false

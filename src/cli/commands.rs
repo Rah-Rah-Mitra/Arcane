@@ -502,14 +502,8 @@ pub fn cmd_recover_outline(
     seed_pdf: Option<std::path::PathBuf>,
     seed_file: Option<std::path::PathBuf>,
     seed_tolerance: u32,
-    ocr: bool,
-    ocr_dpi: u32,
-    ocr_lang: String,
-    ocr_model: Option<String>,
     toc_start_page: Option<u32>,
     toc_end_page: Option<u32>,
-    debug_layout: bool,
-    page_offset: Option<i32>,
 ) -> Result<()> {
     use crate::pdf::pipeline::{self, RecoveryConfig};
     use crate::pdf::seed;
@@ -559,38 +553,10 @@ pub fn cmd_recover_outline(
 
     let path_str = file.display().to_string();
 
-    // OCR-only pipeline branch.
-    let result = if ocr {
-        #[cfg(feature = "ocr")]
-        {
-            use crate::pdf::pipeline::OcrPipelineConfig;
-
-            let ocr_config = OcrPipelineConfig {
-                dpi: ocr_dpi,
-                lang: ocr_lang,
-                model: ocr_model,
-                manual_offset: page_offset,
-                debug_layout,
-            };
-
-            pipeline::recover_outline_ocr(&mut doc, &path_str, &config, &ocr_config)
-                .context("OCR outline recovery pipeline failed")?
-        }
-        #[cfg(not(feature = "ocr"))]
-        {
-            // Silence unused variable warnings in the non-ocr build.
-            let _ = (ocr_dpi, ocr_lang, ocr_model, debug_layout, page_offset);
-            anyhow::bail!(
-                "--ocr requires the OCR feature. Rebuild with: cargo build --features ocr"
-            );
-        }
-    } else if let Some(seed_entries) = seeds {
-        // Silence unused variable warnings for OCR args in non-OCR path.
-        let _ = (ocr_dpi, ocr_lang, ocr_model, debug_layout, page_offset);
+    let result = if let Some(seed_entries) = seeds {
         pipeline::recover_outline_seeded(&mut doc, &path_str, &config, seed_entries)
             .context("seeded outline recovery pipeline failed")?
     } else {
-        let _ = (ocr_dpi, ocr_lang, ocr_model, debug_layout, page_offset);
         pipeline::recover_outline(&mut doc, &path_str, &config)
             .context("outline recovery pipeline failed")?
     };
@@ -619,10 +585,7 @@ pub fn cmd_recover_outline(
 
     if result.chapter_map.is_empty() {
         if result.probe.document_kind == crate::pdf::probe::DocumentKind::Scanned {
-            println!("[arcane] Scanned PDF detected — OCR support not yet available.");
-            println!(
-                "         Outline recovery for scanned documents is planned for a future release."
-            );
+            println!("[arcane] Scanned PDF detected — outline recovery is not supported for scanned documents.");
         } else {
             println!(
                 "[arcane] No headings detected. Try a lower --min-font-ratio or provide --toc-pages."
@@ -1179,6 +1142,31 @@ pub fn cmd_search(
     Ok(())
 }
 
+pub fn cmd_freq(output: std::path::PathBuf, limit: usize) -> Result<()> {
+    let idx = SearchIndex::open_or_create()?;
+    let entries = crate::search::freq::build_frequency_dict(&idx)?;
+
+    if entries.is_empty() {
+        println!("[arcane] Index is empty — nothing to export.");
+        return Ok(());
+    }
+
+    let slice = if limit > 0 && limit < entries.len() {
+        &entries[..limit]
+    } else {
+        &entries
+    };
+
+    crate::search::freq::write_freq_file(slice, &output)?;
+
+    println!(
+        "[arcane] Wrote {} entries to {}",
+        slice.len(),
+        output.display()
+    );
+    Ok(())
+}
+
 pub fn cmd_reindex() -> Result<()> {
     let store = ProjectStore::load()?;
     let idx = SearchIndex::open_or_create()?;
@@ -1530,454 +1518,3 @@ pub fn cmd_sync_pages(
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// ocr — run OCR on a page range and output the recognised text
-// ---------------------------------------------------------------------------
-
-pub fn cmd_ocr(
-    file: PathBuf,
-    pages: String,
-    dpi: u32,
-    json: bool,
-) -> Result<()> {
-    #[cfg(not(feature = "ocr"))]
-    {
-        let _ = (&file, &pages, dpi, json);
-        anyhow::bail!(
-            "OCR support is not compiled in.\n\
-             Rebuild with: cargo build --release --features ocr\n\
-             Then run: arcane init-ocr"
-        );
-    }
-
-    #[cfg(feature = "ocr")]
-    {
-        use crate::pdf::ocr;
-
-        let (start, end) = parse_page_range(&pages)
-            .context("invalid --pages range (expected e.g. \"1-5\" or \"14-20\")")?;
-
-        // Convert from 1-based inclusive to 0-based page indices.
-        let page_indices: Vec<u32> = (start..=end).collect();
-
-        let results =
-            ocr::extract_text_ocr(&file, &page_indices, dpi).context("OCR extraction failed")?;
-
-        if json {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&results)
-                    .context("failed to serialise OCR results")?
-            );
-        } else {
-            for page in &results {
-                let display_page = page.page_index + 1;
-                println!("--- Page {} ---", display_page);
-                println!("{}", page.full_text());
-                println!();
-            }
-        }
-
-        Ok(())
-    }
-}
-
-// ---------------------------------------------------------------------------
-// init-ocr — download OCR models and runtime libraries
-// ---------------------------------------------------------------------------
-
-pub fn cmd_init_ocr(
-    models_dir_override: Option<PathBuf>,
-    skip_runtime: bool,
-    force: bool,
-) -> Result<()> {
-    use indicatif::{ProgressBar, ProgressStyle};
-
-    let dest_dir = match models_dir_override {
-        Some(dir) => {
-            std::fs::create_dir_all(&dir)
-                .with_context(|| format!("failed to create {}", dir.display()))?;
-            dir
-        }
-        None => storage::models_dir()?,
-    };
-
-    println!("[arcane] OCR setup — downloading to {}", dest_dir.display());
-    println!();
-
-    // Build platform-specific manifest.
-    let items = build_download_manifest(skip_runtime)?;
-
-    let bar_style =
-        ProgressStyle::with_template("  {prefix:<30} [{bar:25}] {bytes}/{total_bytes}  {msg}")
-            .unwrap()
-            .progress_chars("=> ");
-
-    for item in &items {
-        let target = dest_dir.join(item.filename);
-        if target.exists() && !force {
-            println!("  [skip] {} — already exists", item.filename);
-            continue;
-        }
-
-        let pb = ProgressBar::new(item.size_hint_bytes);
-        pb.set_style(bar_style.clone());
-        pb.set_prefix(item.label.to_string());
-
-        // Download to .part file first, then rename/extract.
-        let part_path = dest_dir.join(format!("{}.part", item.filename));
-        download_to_file(item.url, &part_path, &pb)?;
-
-        if let Some((inner_path, archive_kind)) = &item.extract {
-            // Extract the target file from the archive.
-            match archive_kind {
-                ArchiveKind::Zip => extract_from_zip(&part_path, inner_path, &target)?,
-                ArchiveKind::TarGz => extract_from_tgz(&part_path, inner_path, &target)?,
-            }
-            let _ = std::fs::remove_file(&part_path);
-        } else {
-            std::fs::rename(&part_path, &target).with_context(|| {
-                format!(
-                    "failed to rename {} to {}",
-                    part_path.display(),
-                    target.display()
-                )
-            })?;
-        }
-
-        pb.finish_with_message("done");
-    }
-
-    println!();
-    println!(
-        "[arcane] OCR setup complete. Files in {}",
-        dest_dir.display()
-    );
-    println!();
-    println!("Build with OCR support:");
-    println!("  cargo build --release --features ocr");
-    println!();
-    println!("Models will be auto-detected at runtime. To override paths:");
-    println!("  ARCANE_OCR_DET_MODEL, ARCANE_OCR_REC_MODEL, ARCANE_OCR_DICT");
-    println!("  ORT_DYLIB_PATH (ONNX Runtime)");
-
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// init-ocr helpers
-// ---------------------------------------------------------------------------
-
-#[derive(Clone, Copy)]
-enum ArchiveKind {
-    Zip,
-    TarGz,
-}
-
-struct DownloadItem {
-    label: &'static str,
-    url: &'static str,
-    filename: &'static str,
-    size_hint_bytes: u64,
-    extract: Option<(&'static str, ArchiveKind)>,
-}
-
-fn build_download_manifest(skip_runtime: bool) -> Result<Vec<DownloadItem>> {
-    let mut items = vec![
-        DownloadItem {
-            label: "Detection model",
-            url: "https://github.com/GreatV/oar-ocr/releases/download/v0.3.0/pp-ocrv5_mobile_det.onnx",
-            filename: "pp-ocrv5_mobile_det.onnx",
-            size_hint_bytes: 4_800_000,
-            extract: None,
-        },
-        DownloadItem {
-            label: "Recognition model (English)",
-            url: "https://github.com/GreatV/oar-ocr/releases/download/v0.3.0/en_pp-ocrv5_mobile_rec.onnx",
-            filename: "en_pp-ocrv5_mobile_rec.onnx",
-            size_hint_bytes: 7_800_000,
-            extract: None,
-        },
-        DownloadItem {
-            label: "Dictionary (English)",
-            url: "https://github.com/GreatV/oar-ocr/releases/download/v0.3.0/ppocrv5_en_dict.txt",
-            filename: "ppocrv5_en_dict.txt",
-            size_hint_bytes: 1_500,
-            extract: None,
-        },
-    ];
-
-    if !skip_runtime {
-        let (ort_item, pdfium_item) = platform_runtime_items()?;
-        items.push(ort_item);
-        items.push(pdfium_item);
-    }
-
-    Ok(items)
-}
-
-fn platform_runtime_items() -> Result<(DownloadItem, DownloadItem)> {
-    let (os, arch) = (std::env::consts::OS, std::env::consts::ARCH);
-
-    let ort = match (os, arch) {
-        ("windows", "x86_64") => DownloadItem {
-            label: "ONNX Runtime",
-            url: "https://github.com/microsoft/onnxruntime/releases/download/v1.24.1/onnxruntime-win-x64-1.24.1.zip",
-            filename: "onnxruntime.dll",
-            size_hint_bytes: 14_000_000,
-            extract: Some((
-                "onnxruntime-win-x64-1.24.1/lib/onnxruntime.dll",
-                ArchiveKind::Zip,
-            )),
-        },
-        ("linux", "x86_64") => DownloadItem {
-            label: "ONNX Runtime",
-            url: "https://github.com/microsoft/onnxruntime/releases/download/v1.24.1/onnxruntime-linux-x64-1.24.1.tgz",
-            filename: "libonnxruntime.so",
-            size_hint_bytes: 14_000_000,
-            extract: Some((
-                "onnxruntime-linux-x64-1.24.1/lib/libonnxruntime.so.1.24.1",
-                ArchiveKind::TarGz,
-            )),
-        },
-        ("linux", "aarch64") => DownloadItem {
-            label: "ONNX Runtime",
-            url: "https://github.com/microsoft/onnxruntime/releases/download/v1.24.1/onnxruntime-linux-aarch64-1.24.1.tgz",
-            filename: "libonnxruntime.so",
-            size_hint_bytes: 12_000_000,
-            extract: Some((
-                "onnxruntime-linux-aarch64-1.24.1/lib/libonnxruntime.so.1.24.1",
-                ArchiveKind::TarGz,
-            )),
-        },
-        ("macos", "aarch64") => DownloadItem {
-            label: "ONNX Runtime",
-            url: "https://github.com/microsoft/onnxruntime/releases/download/v1.24.1/onnxruntime-osx-arm64-1.24.1.tgz",
-            filename: "libonnxruntime.dylib",
-            size_hint_bytes: 8_000_000,
-            extract: Some((
-                "onnxruntime-osx-arm64-1.24.1/lib/libonnxruntime.1.24.1.dylib",
-                ArchiveKind::TarGz,
-            )),
-        },
-        ("macos", "x86_64") => DownloadItem {
-            label: "ONNX Runtime (arm64/Rosetta)",
-            url: "https://github.com/microsoft/onnxruntime/releases/download/v1.24.1/onnxruntime-osx-arm64-1.24.1.tgz",
-            filename: "libonnxruntime.dylib",
-            size_hint_bytes: 8_000_000,
-            extract: Some((
-                "onnxruntime-osx-arm64-1.24.1/lib/libonnxruntime.1.24.1.dylib",
-                ArchiveKind::TarGz,
-            )),
-        },
-        _ => anyhow::bail!(
-            "Unsupported platform: {os}/{arch}. Use --skip-runtime and download manually."
-        ),
-    };
-
-    let pdfium = match (os, arch) {
-        ("windows", "x86_64") => DownloadItem {
-            label: "PDFium",
-            url: "https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-win-x64.tgz",
-            filename: "pdfium.dll",
-            size_hint_bytes: 7_000_000,
-            extract: Some(("bin/pdfium.dll", ArchiveKind::TarGz)),
-        },
-        ("linux", "x86_64") => DownloadItem {
-            label: "PDFium",
-            url: "https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-linux-x64.tgz",
-            filename: "libpdfium.so",
-            size_hint_bytes: 7_000_000,
-            extract: Some(("lib/libpdfium.so", ArchiveKind::TarGz)),
-        },
-        ("linux", "aarch64") => DownloadItem {
-            label: "PDFium",
-            url: "https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-linux-arm64.tgz",
-            filename: "libpdfium.so",
-            size_hint_bytes: 7_000_000,
-            extract: Some(("lib/libpdfium.so", ArchiveKind::TarGz)),
-        },
-        ("macos", "aarch64") => DownloadItem {
-            label: "PDFium",
-            url: "https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-mac-arm64.tgz",
-            filename: "libpdfium.dylib",
-            size_hint_bytes: 7_000_000,
-            extract: Some(("lib/libpdfium.dylib", ArchiveKind::TarGz)),
-        },
-        ("macos", "x86_64") => DownloadItem {
-            label: "PDFium",
-            url: "https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-mac-x64.tgz",
-            filename: "libpdfium.dylib",
-            size_hint_bytes: 7_000_000,
-            extract: Some(("lib/libpdfium.dylib", ArchiveKind::TarGz)),
-        },
-        _ => anyhow::bail!(
-            "Unsupported platform: {os}/{arch}. Use --skip-runtime and download manually."
-        ),
-    };
-
-    Ok((ort, pdfium))
-}
-
-fn download_to_file(url: &str, dest: &std::path::Path, pb: &indicatif::ProgressBar) -> Result<()> {
-    use std::io::{Read as _, Write as _};
-
-    let resp = ureq::get(url)
-        .call()
-        .with_context(|| format!("failed to download {url}"))?;
-
-    let len: Option<u64> = resp
-        .headers()
-        .get("content-length")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.parse().ok());
-    if let Some(len) = len {
-        pb.set_length(len);
-    }
-
-    let mut reader = resp.into_body().into_reader();
-    let mut file = std::fs::File::create(dest)
-        .with_context(|| format!("failed to create {}", dest.display()))?;
-    let mut buf = [0u8; 32768];
-    loop {
-        let n = reader.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        file.write_all(&buf[..n])?;
-        pb.inc(n as u64);
-    }
-
-    Ok(())
-}
-
-fn extract_from_zip(archive: &std::path::Path, inner: &str, dest: &std::path::Path) -> Result<()> {
-    let file = std::fs::File::open(archive)?;
-    let mut zip = zip::ZipArchive::new(file)?;
-    let mut entry = zip
-        .by_name(inner)
-        .with_context(|| format!("{inner} not found in archive"))?;
-    let mut out = std::fs::File::create(dest)?;
-    std::io::copy(&mut entry, &mut out)?;
-    Ok(())
-}
-
-fn extract_from_tgz(archive: &std::path::Path, inner: &str, dest: &std::path::Path) -> Result<()> {
-    let file = std::fs::File::open(archive)?;
-    let gz = flate2::read::GzDecoder::new(file);
-    let mut tar = tar::Archive::new(gz);
-    for entry in tar.entries()? {
-        let mut entry = entry?;
-        let path = entry.path()?.to_string_lossy().replace('\\', "/");
-        if path == inner
-            || path.ends_with(&format!("/{}", inner.rsplit('/').next().unwrap_or(inner)))
-        {
-            let mut out = std::fs::File::create(dest)?;
-            std::io::copy(&mut entry, &mut out)?;
-            return Ok(());
-        }
-    }
-    anyhow::bail!("{inner} not found in archive {}", archive.display())
-}
-
-// ---------------------------------------------------------------------------
-// ocr worker commands
-// ---------------------------------------------------------------------------
-
-pub fn cmd_ocr_worker_init() -> Result<()> {
-    #[cfg(not(feature = "ocr"))]
-    {
-        anyhow::bail!(
-            "OCR support is not compiled in.\n\
-             Rebuild with: cargo build --release --features ocr\n\
-             Then run: arcane init-ocr"
-        );
-    }
-    #[cfg(feature = "ocr")]
-    {
-        if crate::pdf::worker::try_connect().is_some() {
-            println!("[arcane] OCR worker is already running and initialized.");
-            return Ok(());
-        }
-
-        println!("[arcane] Initializing OCR worker (warm-up)…");
-        crate::pdf::worker::cmd_start(None)?;
-        crate::pdf::worker::cmd_stop()?;
-        println!("[arcane] OCR initialization complete.");
-        Ok(())
-    }
-}
-
-pub fn cmd_ocr_worker_start(idle_timeout_secs: Option<u64>) -> Result<()> {
-    #[cfg(not(feature = "ocr"))]
-    {
-        let _ = idle_timeout_secs;
-        anyhow::bail!(
-            "OCR support is not compiled in.\n\
-             Rebuild with: cargo build --release --features ocr\n\
-             Then run: arcane init-ocr"
-        );
-    }
-    #[cfg(feature = "ocr")]
-    {
-        crate::pdf::worker::cmd_start(idle_timeout_secs)
-    }
-}
-
-pub fn cmd_ocr_worker_stop() -> Result<()> {
-    #[cfg(not(feature = "ocr"))]
-    {
-        anyhow::bail!(
-            "OCR support is not compiled in.\n\
-             Rebuild with: cargo build --release --features ocr"
-        );
-    }
-    #[cfg(feature = "ocr")]
-    {
-        crate::pdf::worker::cmd_stop()
-    }
-}
-
-pub fn cmd_ocr_worker_status() -> Result<()> {
-    #[cfg(not(feature = "ocr"))]
-    {
-        anyhow::bail!(
-            "OCR support is not compiled in.\n\
-             Rebuild with: cargo build --release --features ocr"
-        );
-    }
-    #[cfg(feature = "ocr")]
-    {
-        crate::pdf::worker::cmd_status()
-    }
-}
-
-pub fn cmd_ocr_worker_restart(idle_timeout_secs: Option<u64>) -> Result<()> {
-    #[cfg(not(feature = "ocr"))]
-    {
-        let _ = idle_timeout_secs;
-        anyhow::bail!(
-            "OCR support is not compiled in.\n\
-             Rebuild with: cargo build --release --features ocr"
-        );
-    }
-    #[cfg(feature = "ocr")]
-    {
-        crate::pdf::worker::cmd_restart(idle_timeout_secs)
-    }
-}
-
-pub fn cmd_worker_serve(idle_timeout_secs: Option<u64>) -> Result<()> {
-    #[cfg(not(feature = "ocr"))]
-    {
-        let _ = idle_timeout_secs;
-        anyhow::bail!(
-            "OCR support is not compiled in.\n\
-             Rebuild with: cargo build --release --features ocr"
-        );
-    }
-    #[cfg(feature = "ocr")]
-    {
-        crate::pdf::worker::serve_loop(idle_timeout_secs)
-    }
-}

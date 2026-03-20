@@ -19,27 +19,6 @@ use super::seed::{self, ResolvedSeed, SeedEntry};
 // SeedEntry is used in recover_outline_seeded's public parameter.
 
 // ---------------------------------------------------------------------------
-// OCR pipeline config (feature-gated)
-// ---------------------------------------------------------------------------
-
-/// Configuration specific to the OCR-only pipeline (`--ocr` mode).
-#[cfg(feature = "ocr")]
-pub struct OcrPipelineConfig {
-    /// Render DPI for OCR (default 150).
-    pub dpi: u32,
-    /// Language hint (currently unused, reserved for future multi-lang).
-    #[allow(dead_code)]
-    pub lang: String,
-    /// Model variant (currently unused, reserved for server model selection).
-    #[allow(dead_code)]
-    pub model: Option<String>,
-    /// Manual page offset override (`--page-offset`).
-    pub manual_offset: Option<i32>,
-    /// Emit debug layout JSON to stderr (`--debug-layout`).
-    pub debug_layout: bool,
-}
-
-// ---------------------------------------------------------------------------
 // Configuration & result types
 // ---------------------------------------------------------------------------
 
@@ -127,7 +106,7 @@ pub struct VerificationEntry {
 /// Run the full tiered outline recovery pipeline.
 ///
 /// 1. **Probe** — classify document (text vs scanned)
-/// 2. **Route** — Tier 1 (heuristic) for text, report "OCR needed" for scanned
+/// 2. **Route** — Tier 1 (heuristic) for text, report unsupported for scanned
 /// 3. **Extract** — headings via enhanced clustering + positions
 /// 4. **Offset** — calculate logical-to-physical page delta
 /// 5. **Verify** — fuzzy-match headings against page text
@@ -143,52 +122,17 @@ pub fn recover_outline(
     // Phase 2: Route.
     match probe_result.document_kind {
         DocumentKind::Scanned => {
-            #[cfg(feature = "ocr")]
-            {
-                tracing::info!("Scanned PDF — running Tier 2 OCR on all pages");
-                let all_pages: Vec<u32> = (0..probe_result.total_pages).collect();
-                match tier2_ocr(path, &all_pages, config, None) {
-                    Ok(h) if !h.is_empty() => {
-                        // Continue the pipeline with OCR-extracted headings below.
-                        // We break out of the match by falling through to Phase 3
-                        // via a separate code path.
-                        return finish_pipeline(doc, path, config, probe_result, None, h, None);
-                    }
-                    Ok(_) => {
-                        tracing::warn!("Tier 2 OCR produced no headings for scanned PDF");
-                    }
-                    Err(e) => {
-                        tracing::warn!("Tier 2 OCR failed: {e:#}");
-                    }
-                }
-                return Ok(RecoveryResult {
-                    probe: probe_result,
-                    layout: None,
-                    offset: None,
-                    headings: vec![],
-                    chapter_map: BTreeMap::new(),
-                    verification: vec![],
-                    injected_count: None,
-                    seed_verification: None,
-                });
-            }
-            #[cfg(not(feature = "ocr"))]
-            {
-                tracing::warn!(
-                    "Scanned PDF detected — OCR not compiled in. \
-                     Rebuild with `cargo build --features ocr` to process this file."
-                );
-                return Ok(RecoveryResult {
-                    probe: probe_result,
-                    layout: None,
-                    offset: None,
-                    headings: vec![],
-                    chapter_map: BTreeMap::new(),
-                    verification: vec![],
-                    injected_count: None,
-                    seed_verification: None,
-                });
-            }
+            tracing::warn!("Scanned PDF detected — outline recovery not supported for scanned documents.");
+            return Ok(RecoveryResult {
+                probe: probe_result,
+                layout: None,
+                offset: None,
+                headings: vec![],
+                chapter_map: BTreeMap::new(),
+                verification: vec![],
+                injected_count: None,
+                seed_verification: None,
+            });
         }
         DocumentKind::Empty => {
             anyhow::bail!("PDF has no usable content");
@@ -214,35 +158,6 @@ pub fn recover_outline(
         });
     }
 
-    // Tier 2 quality fallback: if Tier 1 text is mostly garbled (< 50% alpha),
-    // the PDF has a broken font encoding — re-run on the same pages via OCR.
-    // Uses `let headings = ...` shadowing so no `mut` is needed on the binding.
-    #[cfg(feature = "ocr")]
-    let headings = {
-        let quality = heading_text_quality(&headings);
-        if quality < 0.5 {
-            tracing::info!(
-                "Tier 1 text quality {:.0}% — falling back to OCR on {} candidate pages",
-                quality * 100.0,
-                headings.len()
-            );
-            let pages: Vec<u32> = headings.iter().map(|h| h.page_index).collect();
-            match tier2_ocr(path, &pages, config, Some(&headings)) {
-                Ok(ocr_headings) if !ocr_headings.is_empty() => ocr_headings,
-                Ok(_) => {
-                    tracing::warn!("Tier 2 OCR produced no headings — keeping Tier 1 results");
-                    headings
-                }
-                Err(e) => {
-                    tracing::warn!("Tier 2 OCR failed: {e:#} — keeping Tier 1 results");
-                    headings
-                }
-            }
-        } else {
-            headings
-        }
-    };
-
     finish_pipeline(
         doc,
         path,
@@ -261,15 +176,14 @@ pub fn recover_outline(
 /// Run the seeded outline recovery pipeline.
 ///
 /// Uses `seeds` (from `--seed-pdf` or `--seed-file`) as ground-truth chapter
-/// titles, bypassing heuristic/OCR heading *detection*.  OCR or text search
-/// is used only to *verify* which physical page each seed title lands on.
+/// titles, bypassing heuristic heading *detection*.  Text search
+/// is used to *verify* which physical page each seed title lands on.
 ///
 /// Flow:
 /// 1. **Probe** — classify document type.
 /// 2. **Offset from seeds** — vote over candidate offsets; fall back to
 ///    standard detection if the vote is inconclusive.
-/// 3. **Resolve** — locate each seed in the target PDF (OCR when available,
-///    otherwise lopdf text extraction).
+/// 3. **Resolve** — locate each seed in the target PDF via text extraction.
 /// 4. **Convert** — seeds → `HeadingCandidate` list.
 /// 5. **Finish** — phases 5 & 6 (verify + inject) via `finish_pipeline`.
 pub fn recover_outline_seeded(
@@ -280,9 +194,6 @@ pub fn recover_outline_seeded(
 ) -> Result<RecoveryResult> {
     // Phase 1: Probe.
     let probe_result = probe::probe(doc, path);
-    let _total_pages = probe_result.total_pages;
-    #[cfg(feature = "ocr")]
-    let total_pages = _total_pages;
 
     // Phase 2: Offset from seeds.
     // Use a lower internal threshold (0.15) for the vote so that even partially-
@@ -347,21 +258,6 @@ pub fn recover_outline_seeded(
     };
 
     // Phase 3: Resolve seeds → verified page locations.
-    #[cfg(feature = "ocr")]
-    let resolved = seed::verify_seeds_ocr(
-        &seeds,
-        offset,
-        std::path::Path::new(path),
-        config.fuzzy_threshold,
-        config.page_shift_tolerance,
-        total_pages,
-    )
-    .unwrap_or_else(|e| {
-        tracing::warn!("Seed OCR verification failed ({e:#}), falling back to text extraction");
-        seed::resolve_seeds(&seeds, offset, doc, config.fuzzy_threshold, config.page_shift_tolerance)
-    });
-
-    #[cfg(not(feature = "ocr"))]
     let resolved = seed::resolve_seeds(
         &seeds,
         offset,
@@ -409,7 +305,7 @@ pub fn recover_outline_seeded(
 /// Complete phases 4–6 of the pipeline (offset, verify, inject) and return
 /// the final [`RecoveryResult`].
 ///
-/// Extracted so that both the TextBased/Mixed path and the Scanned/OCR path
+/// Extracted so that both the TextBased/Mixed path and the seeded path
 /// can share the same logic without duplication.
 ///
 /// `override_offset` — when `Some`, skips the normal offset calculation and
@@ -479,95 +375,6 @@ fn finish_pipeline(
         injected_count,
         seed_verification: None,
     })
-}
-
-// ---------------------------------------------------------------------------
-// Heading text quality helper (always compiled)
-// ---------------------------------------------------------------------------
-
-#[cfg_attr(not(feature = "ocr"), allow(dead_code))]
-/// Returns the ratio of alphabetic characters across all heading texts (0.0–1.0).
-///
-/// Values below ~0.5 indicate garbled font encoding (e.g. non-standard
-/// `ToUnicode` mappings that map bytes to `~` or null bytes).  The OCR tier
-/// uses this as its trigger threshold.
-fn heading_text_quality(headings: &[HeadingCandidate]) -> f32 {
-    let total: usize = headings.iter().map(|h| h.text.len()).sum();
-    if total == 0 {
-        return 0.0;
-    }
-    let alpha: usize = headings
-        .iter()
-        .flat_map(|h| h.text.chars())
-        .filter(|c| c.is_alphabetic())
-        .count();
-    alpha as f32 / total as f32
-}
-
-// ---------------------------------------------------------------------------
-// Tier 2: OCR-based extraction (feature-gated)
-// ---------------------------------------------------------------------------
-
-/// Tier 2 extraction — render pages via pdfium and recognise text with oar-ocr.
-///
-/// Only compiled when the `ocr` Cargo feature is enabled.
-///
-/// When `tier1_headings` is provided, OCR results are filtered to only keep
-/// regions whose font size is within 50% of a Tier 1 heading on the same page.
-/// This uses Tier 1's correct font-size discrimination while replacing the
-/// garbled text with OCR-recognised text.
-#[cfg(feature = "ocr")]
-fn tier2_ocr(
-    path: &str,
-    candidate_pages: &[u32],
-    _config: &RecoveryConfig,
-    tier1_headings: Option<&[HeadingCandidate]>,
-) -> Result<Vec<HeadingCandidate>> {
-    use super::ocr;
-    let positioned = ocr::extract_headings_ocr(
-        std::path::Path::new(path),
-        candidate_pages,
-        150, // 150 DPI: ~0.3 s/page, good enough for headings
-    )?;
-
-    // Build a per-page set of Tier 1 heading font sizes for filtering.
-    let tier1_sizes: std::collections::HashMap<u32, Vec<f32>> = tier1_headings
-        .map(|hs| {
-            let mut map: std::collections::HashMap<u32, Vec<f32>> =
-                std::collections::HashMap::new();
-            for h in hs {
-                map.entry(h.page_index).or_default().push(h.font_size);
-            }
-            map
-        })
-        .unwrap_or_default();
-
-    let headings = positioned
-        .into_iter()
-        .filter(|pt| !pt.text.is_empty())
-        .filter(|pt| {
-            // If we have Tier 1 reference sizes, only keep OCR regions whose
-            // font size is within 50% of some Tier 1 heading on the same page.
-            if let Some(sizes) = tier1_sizes.get(&pt.page_index) {
-                sizes.iter().any(|&s| {
-                    let ratio = pt.font_size / s;
-                    (0.5..=1.5).contains(&ratio)
-                })
-            } else {
-                // No Tier 1 reference for this page (e.g. scanned PDF) — keep all.
-                true
-            }
-        })
-        .map(|pt| HeadingCandidate {
-            page_index: pt.page_index,
-            font_size: pt.font_size,
-            text: pt.text,
-            y_position: Some(pt.y),
-            // Coarse depth assignment: larger boxes → top-level headings.
-            depth_level: if pt.font_size > 20.0 { 1 } else { 2 },
-        })
-        .collect();
-    Ok(headings)
 }
 
 // ---------------------------------------------------------------------------
@@ -769,215 +576,6 @@ fn build_chapter_map(headings: &[HeadingCandidate]) -> BTreeMap<u32, String> {
     map.into_iter()
         .map(|(page, h)| (page, h.text.clone()))
         .collect()
-}
-
-// ---------------------------------------------------------------------------
-// OCR-only pipeline (feature-gated)
-// ---------------------------------------------------------------------------
-
-/// Run the OCR-only TOC reconstruction pipeline.
-///
-/// Bypasses all font-histogram heuristics. Reads the TOC pages via OCR,
-/// parses structured entries, reconstructs hierarchy, estimates offset,
-/// and injects hierarchical outlines.
-///
-/// Called when `--ocr` is specified on the `recover-outline` command.
-#[cfg(feature = "ocr")]
-pub fn recover_outline_ocr(
-    doc: &mut Document,
-    path: &str,
-    config: &RecoveryConfig,
-    ocr_config: &OcrPipelineConfig,
-) -> Result<RecoveryResult> {
-    use super::{ocr, ocr_ir, toc_extract, toc_hierarchy};
-
-    // Phase 1: Probe.
-    let probe_result = probe::probe(doc, path);
-    let total_pages = probe_result.total_pages;
-
-    // Phase 2: Determine TOC page range.
-    let toc_range = config.toc_pages.unwrap_or_else(|| {
-        let end = (total_pages.saturating_sub(1)).min(14);
-        (0, end)
-    });
-    let toc_page_indices: Vec<u32> = (toc_range.0..=toc_range.1).collect();
-
-    tracing::info!(
-        "OCR pipeline: scanning TOC pages {}-{} ({} pages) at {} DPI",
-        toc_range.0,
-        toc_range.1,
-        toc_page_indices.len(),
-        ocr_config.dpi
-    );
-
-    // Phase 3: OCR the TOC pages.
-    let ocr_results = ocr::extract_text_ocr(
-        std::path::Path::new(path),
-        &toc_page_indices,
-        ocr_config.dpi,
-    )
-    .context("OCR failed on TOC pages")?;
-
-    // Phase 4: Get page dimensions from lopdf.
-    let page_dims = get_page_dimensions(doc, &toc_page_indices);
-
-    // Phase 5: Normalize OCR → IR.
-    let ocr_pages = ocr_ir::normalize_pages(&ocr_results, &page_dims);
-
-    // Debug output.
-    if ocr_config.debug_layout {
-        if let Ok(debug_json) = serde_json::to_string_pretty(&ocr_pages) {
-            eprintln!("[debug-layout]\n{debug_json}");
-        }
-    }
-
-    // Phase 6: Extract TOC entries.
-    let toc_entries = toc_extract::extract_toc_entries(&ocr_pages);
-
-    if toc_entries.is_empty() {
-        tracing::warn!(
-            "OCR pipeline: no TOC entries found on pages {}-{}",
-            toc_range.0,
-            toc_range.1
-        );
-        return Ok(RecoveryResult {
-            probe: probe_result,
-            layout: None,
-            offset: None,
-            headings: vec![],
-            chapter_map: std::collections::BTreeMap::new(),
-            verification: vec![],
-            injected_count: None,
-            seed_verification: None,
-        });
-    }
-
-    tracing::info!("OCR pipeline: extracted {} TOC entries", toc_entries.len());
-
-    // Phase 7: Assign hierarchy.
-    let hierarchy_config = toc_hierarchy::HierarchyConfig {
-        max_depth: config.max_depth,
-        ..toc_hierarchy::HierarchyConfig::default()
-    };
-    let hierarchical = toc_hierarchy::assign_hierarchy(&toc_entries, &hierarchy_config);
-
-    // Phase 8: Estimate page offset.
-    let offset_result =
-        toc_extract::estimate_offset_from_toc(&toc_entries, doc, ocr_config.manual_offset);
-
-    for warning in &offset_result.warnings {
-        tracing::warn!("OCR offset: {warning}");
-    }
-
-    let active_offset = ocr_config
-        .manual_offset
-        .unwrap_or(offset_result.arabic_offset);
-
-    tracing::info!(
-        "OCR pipeline: using offset {:+} (confidence: {:.0}%)",
-        active_offset,
-        offset_result.confidence * 100.0
-    );
-
-    // Phase 9: Convert to HeadingCandidates with physical page indices.
-    let headings: Vec<HeadingCandidate> = hierarchical
-        .iter()
-        .filter_map(|h| {
-            let page_num = h.entry.page_number?;
-            let physical = (page_num as i32 - 1 + active_offset) as i64;
-            if physical < 0 || physical >= total_pages as i64 {
-                return None;
-            }
-            Some(HeadingCandidate {
-                page_index: physical as u32,
-                font_size: match h.depth {
-                    1 => 18.0,
-                    2 => 14.0,
-                    _ => 12.0,
-                },
-                text: h.entry.title.clone(),
-                y_position: None,
-                depth_level: h.depth,
-            })
-        })
-        .collect();
-
-    if headings.is_empty() {
-        tracing::warn!("OCR pipeline: no headings after page-offset mapping");
-        return Ok(RecoveryResult {
-            probe: probe_result,
-            layout: None,
-            offset: None,
-            headings: vec![],
-            chapter_map: std::collections::BTreeMap::new(),
-            verification: vec![],
-            injected_count: None,
-            seed_verification: None,
-        });
-    }
-
-    tracing::info!(
-        "OCR pipeline: {} heading(s) mapped to physical pages",
-        headings.len()
-    );
-
-    // Phase 10: Finish pipeline (verify + inject).
-    let pipeline_offset = Some(OffsetResult {
-        offset: active_offset as i32,
-        confidence: offset_result.confidence,
-        method: OffsetMethod::OcrTocParsing,
-        evidence: vec![],
-    });
-
-    finish_pipeline(
-        doc,
-        path,
-        config,
-        probe_result,
-        None,
-        headings,
-        pipeline_offset,
-    )
-}
-
-/// Get page dimensions from the lopdf Document for specified page indices.
-///
-/// Parses the `/MediaBox` from each page dictionary, defaulting to US Letter
-/// (612×792 points) if not found.
-#[cfg(feature = "ocr")]
-fn get_page_dimensions(doc: &Document, page_indices: &[u32]) -> Vec<(f32, f32)> {
-    use lopdf::Object;
-
-    let pages = doc.get_pages();
-
-    page_indices
-        .iter()
-        .map(|&idx| {
-            let page_num = idx + 1; // lopdf uses 1-based
-            if let Some(&page_oid) = pages.get(&page_num) {
-                if let Ok(page_dict) = doc.get_dictionary(page_oid) {
-                    if let Ok(Object::Array(media_box)) = page_dict.get(b"MediaBox") {
-                        if media_box.len() == 4 {
-                            let w = obj_to_f32(&media_box[2]).unwrap_or(612.0);
-                            let h = obj_to_f32(&media_box[3]).unwrap_or(792.0);
-                            return (w, h);
-                        }
-                    }
-                }
-            }
-            (612.0, 792.0) // US Letter default
-        })
-        .collect()
-}
-
-/// Extract an f32 from a lopdf Object (Integer or Real).
-#[cfg(feature = "ocr")]
-fn obj_to_f32(obj: &lopdf::Object) -> Option<f32> {
-    match obj {
-        lopdf::Object::Integer(i) => Some(*i as f32),
-        lopdf::Object::Real(r) => Some(*r as f32),
-        _ => None,
-    }
 }
 
 // ---------------------------------------------------------------------------

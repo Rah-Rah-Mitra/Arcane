@@ -55,48 +55,6 @@ strsim = "0.11"
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 
-# HTTP downloads (init-ocr)
-ureq = "3"
-
-# Archive extraction (init-ocr)
-zip = { version = "2", default-features = false, features = ["deflate"] }
-tar = "0.4"
-flate2 = "1"
-
-# Progress bars
-indicatif = "0.18"
-
-[features]
-default = []
-# Build with OCR support: cargo build --release --features ocr
-# Requires onnxruntime.dll v1.24.x at runtime (set ORT_DYLIB_PATH or place next to binary).
-# Download from: https://github.com/microsoft/onnxruntime/releases/tag/v1.24.1
-# Also requires OCR models in models/ — see docs/USER_GUIDE.md.
-ocr = ["dep:oar-ocr", "dep:pdfium-render", "dep:ort"]
 
 [dev-dependencies]
 tempfile = "3"
-
-# ---------------------------------------------------------------------------
-# OCR overlay (optional — cargo build --features ocr)
-# ---------------------------------------------------------------------------
-[dependencies.oar-ocr]
-version = "0.6"
-optional = true
-# disable download-binaries so oar-ocr itself doesn't pull in features we override
-default-features = false
-
-[dependencies.pdfium-render]
-version = "0.8"
-optional = true
-features = ["image"]
-
-# ort with load-dynamic: loads ONNX Runtime as a DLL at runtime instead of
-# statically linking the prebuilt static library.  This avoids MSVC ABI
-# incompatibility issues with the prebuilt ort-sys static lib.
-# api-24 enables all OrtApi fields up to v1.24 (needed for load-dynamic EP stubs).
-[dependencies.ort]
-version = "2.0.0-rc.12"
-optional = true
-default-features = false
-features = ["load-dynamic", "ndarray", "api-24"]

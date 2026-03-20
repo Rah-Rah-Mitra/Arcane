@@ -66,12 +66,7 @@ src/
 │   ├── outlines.rs         # /Outlines (bookmarks) extraction with depth support
 │   ├── page_labels.rs      # /PageLabels parsing and resolution
 │   ├── text.rs             # Text extraction from PDF pages
-│   ├── ocr.rs              # OCR overlay tier (optional, behind `ocr` feature flag)
-│   ├── worker.rs           # Persistent OCR worker (IPC server/client + lifecycle)
 │   ├── seed.rs             # Seeded outline recovery (reference PDF / JSON seed file)
-│   ├── ocr_ir.rs           # OCR intermediate representation: blocks/lines/words normalization (optional, behind ocr feature flag)
-│   ├── toc_extract.rs      # TOC entry extraction from OCR IR: parsing, stitching, offset (optional, behind ocr feature flag)
-│   ├── toc_hierarchy.rs    # Hierarchy reconstruction: numbering + indent + font-size signals (optional, behind ocr feature flag)
 │   ├── ops.rs              # Structural PDF operations (merge, split, rotate, encrypt)
 │   └── writer.rs           # Low-level PDF writing helpers
 ├── search/
@@ -115,17 +110,6 @@ src/
 - `notify` (7) - File system watching
 - `ratatui` (0.29) - Terminal UI framework
 - `crossterm` (0.28) - Terminal manipulation
-- `ureq` (3) - HTTP downloads (`init-ocr`)
-- `zip` (2) - ZIP archive extraction (`init-ocr`)
-- `tar` (0.4) - tar archive extraction (`init-ocr`)
-- `flate2` (1) - gzip decompression (`init-ocr`)
-- `indicatif` (0.18) - Progress bars (`init-ocr`)
-
-**Optional OCR Dependencies** (enabled with `--features ocr`):
-- `oar-ocr` (0.6) - PaddleOCR v5 via ONNX Runtime for text recognition
-- `pdfium-render` (0.8) - PDF page rasterization via Google PDFium
-- `ort` (2.0.0-rc.12) - ONNX Runtime bindings with `load-dynamic` (DLL loaded at runtime)
-
 **Development Dependencies:**
 - `tempfile` (3) - Temporary directories for testing
 
@@ -154,10 +138,7 @@ The CLI layer uses `clap` derive macros for declarative command definitions in `
 - `cmd_tag()` / `cmd_untag()`: Tag management
 - `cmd_merge()` / `cmd_split()` / `cmd_rotate()`: Structural PDF operations
 - `cmd_protect()` / `cmd_unlock()`: PDF encryption
-- `cmd_ocr()`: Runs OCR on a page range and outputs recognized text (requires `--features ocr`, wired to `arcane ocr run`)
-- `cmd_init_ocr()`: Downloads OCR models + runtime DLLs to `~/Arcane/models/`
-- `cmd_ocr_worker_init()` / `cmd_ocr_worker_start()` / `cmd_ocr_worker_stop()` / `cmd_ocr_worker_status()` / `cmd_ocr_worker_restart()`: OCR worker lifecycle management
-- `cmd_worker_serve()`: Internal worker server loop (hidden command)
+- `cmd_freq()`: Generates a frequency dictionary from the search index
 - `cmd_watch()`: File system watcher
 - `cmd_tui()`: Interactive terminal UI
 
@@ -382,7 +363,7 @@ pipeline.rs (orchestrator)
 - `RecoveryResult` — full pipeline output (probe, layout, offset, headings, verification, injection count, seed_verification)
 - `SeedEntry` / `ResolvedSeed` / `SeedStatus` — seed-based recovery types (title, page, depth, Confirmed/Estimated/OutOfRange)
 
-The pipeline is designed so each module can be used independently via CLI sub-commands (`probe`, `detect-layout`, `find-offset`, `sync-pages`, `ocr`) or composed together for the full `recover-outline` flow.
+The pipeline is designed so each module can be used independently via CLI sub-commands (`probe`, `detect-layout`, `find-offset`, `sync-pages`) or composed together for the full `recover-outline` flow.
 
 #### Seeded Outline Recovery (`src/pdf/seed.rs`)
 
@@ -399,7 +380,7 @@ When a PDF has broken font encoding (garbled text), heuristic heading detection 
                     probe(target)    calculate_offset_from_seeds()
                         │            offset vote (-T..+T) → winner
                         │                        │
-                        └─── resolve_seeds() ────┘  (or verify_seeds_ocr() w/ OCR)
+                        └─── resolve_seeds() ────┘
                                                  │
                              seeds_to_headings() │
                                                  │  Vec<HeadingCandidate>
@@ -413,119 +394,9 @@ When a PDF has broken font encoding (garbled text), heuristic heading detection 
 - `load_seeds_from_json(path)` — parses `[{"title": "...", "page": N, "depth": D}]` (1-based pages converted to 0-based)
 - `calculate_offset_from_seeds(seeds, doc, threshold, tolerance)` — vote-based consensus: for each candidate offset `d` in `[-T, +T]`, extracts page text, fuzzy-matches against seed titles, returns the most-voted offset
 - `resolve_seeds(seeds, offset, doc, threshold, tolerance)` — text-based page verification (always compiled)
-- `verify_seeds_ocr(seeds, offset, path, threshold, tolerance, total_pages)` — OCR-based verification (`#[cfg(feature = "ocr")]`)
 - `seeds_to_headings(resolved)` — converts `ResolvedSeed` → `HeadingCandidate`, skipping `OutOfRange` entries
 
 **Offset fallback logic:** When seed vote returns `None` (garbled text gives 0 similarity for all seeds) and standard `offset::calculate_offset()` confidence < 30%, the pipeline defaults to offset=0 — correct for same-book copies where pages are at identical positions.
-
-#### OCR-Based TOC Reconstruction (`--ocr` pipeline)
-
-When `--ocr` is specified on `recover-outline`, a dedicated pipeline is invoked that
-bypasses font-size heuristics entirely:
-
-1. **OCR** — renders TOC pages via pdfium and recognizes text with oar-ocr
-2. **IR Normalization** (`ocr_ir.rs`) — structures raw regions into blocks > lines > words
-   with reading-order sorting, line merging, dehyphenation, and noise filtering
-3. **TOC Parsing** (`toc_extract.rs`) — extracts (title, page_number) entries with dot-leader
-   handling, continuation-line stitching, and roman/arabic numeral support
-4. **Hierarchy** (`toc_hierarchy.rs`) — assigns depth levels using weighted signals from
-   numbering semantics (0.5), indent clustering (0.3), and font-size hints (0.2)
-5. **Offset** (`toc_extract.rs`) — RANSAC consensus voting to derive the physical-to-printed
-   page offset, with separate handling for roman preface and arabic body zones
-6. **Injection** — reuses `finish_pipeline()` and `inject_hierarchical_outlines()` from the
-   existing pipeline
-
-```
-pipeline.rs: recover_outline_ocr()
-    │
-    ├── probe.rs              — Classify document
-    ├── ocr.rs                — extract_text_ocr() on TOC pages
-    ├── ocr_ir.rs             — normalize_pages() → Vec<OcrPage>
-    │       └── OcrPage { blocks: Vec<OcrBlock { lines: Vec<OcrLine { words }> }> }
-    ├── toc_extract.rs        — extract_toc_entries() → Vec<TocEntry>
-    │       └── estimate_offset_from_toc() → OcrOffsetResult
-    ├── toc_hierarchy.rs      — assign_hierarchy() → Vec<HierarchicalTocEntry>
-    └── pipeline.rs           — finish_pipeline() (shared with heuristic + seeded paths)
-            └── heuristics.rs — inject_hierarchical_outlines()
-```
-
-**Key types:**
-- `OcrPage` / `OcrBlock` / `OcrLine` / `OcrWord` — structured OCR intermediate representation
-- `TocEntry` — parsed TOC line (title, page number, source page, x-position, font size)
-- `OcrOffsetResult` — RANSAC offset with confidence and warnings
-- `HierarchicalTocEntry` — TOC entry with assigned depth level
-- `HierarchyConfig` — weights for numbering (0.5), indent (0.3), font-size (0.2) signals
-- `OcrPipelineConfig` — OCR pipeline settings (dpi, lang, model, manual_offset, debug_layout)
-
-#### OCR Overlay Tier (`src/pdf/ocr.rs`)
-
-Behind the `ocr` feature flag, Arcane includes an OCR overlay tier for PDFs with broken font encoding or scanned pages. The module uses:
-
-- **pdfium-render**: Rasterizes PDF pages at configurable DPI (default 150)
-- **oar-ocr**: PaddleOCR v5 mobile models for text detection + recognition
-- **ort (load-dynamic)**: Loads ONNX Runtime at runtime via `ORT_DYLIB_PATH`
-
-```
-extract_headings_ocr(path, page_indices, dpi)          → Vec<PositionedText>
-    │                                                     (worker-routed API)
-    ├── If worker is running: IPC request to worker
-    ├── If worker absent: start temporary worker, request, stop
-    └── Fallback: extract_headings_ocr_direct() in-process
-
-extract_headings_ocr_direct(path, page_indices, dpi)   → Vec<PositionedText>
-    ├── ensure_ort_loaded()      — OnceLock-guarded DLL init (once per process)
-    ├── get_ocr_engine()         — OnceLock-cached OAROCR (built once, reused)
-    ├── bind_pdfium()            — ~/Arcane/models/ → CWD → system search
-    ├── Render + batch predict   — Chunks of up to 16 pages
-    ├── Filter box_h ≥ 1.5%      — Keep heading-sized regions only
-    └── Pixel → PDF coords       — Flip Y, scale by 72/dpi → PositionedText
-
-extract_text_ocr(path, page_indices, dpi)              → Vec<OcrPageResult>
-    │                                                     (worker-routed API)
-    ├── Same worker lifecycle behavior as headings path
-    └── Fallback: extract_text_ocr_direct() in-process
-
-extract_text_ocr_direct(path, page_indices, dpi)       → Vec<OcrPageResult>
-    ├── Same render + batch pipeline as above
-    ├── No bounding-box height filter (returns everything)
-    ├── Lower confidence threshold (0.4 vs 0.6)
-    └── Returns OcrPageResult { page_index, regions: Vec<OcrRegion> }
-        └── OcrRegion { text, confidence, x, y, font_size }
-```
-
-The `arcane ocr run` command uses `extract_text_ocr()` to expose full OCR output to users. `OcrPageResult::full_text()` sorts regions top-to-bottom then left-to-right and joins with newlines.
-
-#### OCR Worker (`src/pdf/worker.rs`)
-
-The worker provides cross-process OCR engine reuse, so model loading is amortized across commands:
-
-- `arcane ocr start` spawns `arcane worker-serve` in the background
-- Worker binds a loopback TCP socket and writes `~/Arcane/ocr-worker.json`
-- Client calls (`extract_text_ocr`, `extract_headings_ocr`) send length-prefixed JSON requests
-- `arcane ocr stop` sends a graceful stop request
-- `arcane ocr status` reports PID/port/uptime/request count
-- `arcane ocr init` performs warm-up validation (start + health-check + stop)
-
-**Model path resolution** (env var → `~/Arcane/models/` → `models/` CWD-relative):
-- `pp-ocrv5_mobile_det.onnx` — detection (language-agnostic)
-- `en_pp-ocrv5_mobile_rec.onnx` — English recognition
-- `ppocrv5_en_dict.txt` — English dictionary
-
-Run `arcane init-ocr` to download everything. Override via env vars: `ARCANE_OCR_DET_MODEL`, `ARCANE_OCR_REC_MODEL`, `ARCANE_OCR_DICT`.
-
-**Performance optimizations:**
-- **Persistent worker reuse**: OCR model load is paid once per worker lifetime, not per CLI invocation.
-- **Engine caching**: `OAROCR` is stored in a `OnceLock` — model loading happens once per process. `OAROCR` is `Send + Sync` (backed by `Vec<Mutex<Session>>` + `AtomicUsize`).
-- **Chunked render+predict**: Pages are rendered and predicted in chunks of 16, avoiding large intermediate vectors and repeated `drain()` shifting.
-- **Platform-aware ORT**: `ORT_DYLIB_DEFAULT` resolves to `onnxruntime.dll` / `libonnxruntime.so` / `libonnxruntime.dylib` per platform.
-
-**Pipeline integration** (`pipeline.rs`):
-- `heading_text_quality()` computes `alpha_chars / total_chars` across Tier 1 headings
-- If quality < 0.5 (garbled font encoding), `tier2_ocr()` re-runs on the same candidate pages
-- For `DocumentKind::Scanned`, OCR runs on all pages directly
-- Results feed back as `HeadingCandidate` into the standard offset → verify → inject flow
-
-`layout.rs` also contains two `#[allow(dead_code)]` pixel-density stub functions (`estimate_weight_from_pixel_density`, `detect_italic_hpp`) reserved for future bold/italic detection on scanned PDFs where no `/FontDescriptor` is available.
 
 #### Performance
 
@@ -684,9 +555,6 @@ Key test areas:
   - page-number detection, anchor detection
 - `pdf/offset.rs`: TOC line parsing, fuzzy similarity, page-number consensus, range filtering
 - `pdf/pipeline.rs`: Heading merging, chapter map building, line similarity, HeadingInfo conversion
-- `pdf/ocr_ir.rs`: Reading order normalization, line fragment merging, dehyphenation, noise filtering, block grouping, two-column sort (requires `--features ocr`)
-- `pdf/toc_extract.rs`: TOC line parsing (simple, dotted, roman), appendix numbering, continuation stitching, title cleaning, offset consensus, mixed roman/arabic (requires `--features ocr`)
-- `pdf/toc_hierarchy.rs`: Numbering depth parsing, hierarchy from numbering/indent/mixed signals, depth-skip sanitization (requires `--features ocr`)
 - `pdf/page_labels.rs`: Roman numeral conversion, label resolution
 - `pdf/ops.rs`: Input validation for merge, split, rotate, encrypt
 - `search/indexer.rs`: Index creation, page indexing
@@ -755,50 +623,26 @@ Bad:
 
 ### Planned Features
 
-1. ~~**OCR Support for Scanned PDFs**~~ — **Implemented** (see `src/pdf/ocr.rs`)
-   - Build with `cargo build --release --features ocr`
-   - Handles encoding-broken and scanned PDFs via PaddleOCR v5 + pdfium-render
-
-2. **YouTube Integration** (src/models/source.rs — `youtube()` trait method)
+1. **YouTube Integration** (src/models/source.rs — `youtube()` trait method)
    - Extract transcripts from lecture videos
    - Link video timestamps to textbook sections
    - Store as markdown with video embeds
 
-3. **CAS Garbage Collection** (`gc` command)
+2. **CAS Garbage Collection** (`gc` command)
    - Find orphaned blobs not referenced by any source
    - Reclaim disk space after source/project removal
 
-4. **Integrity Checking** (`doctor` command)
+3. **Integrity Checking** (`doctor` command)
    - Verify every DB source has its filesystem counterpart
    - Re-hash CAS blobs to detect corruption
 
-5. **Export Functionality**
+4. **Export Functionality**
    - Export project metadata and PDFs to a portable directory
    - Bundle for sharing or migration
 
-6. **GUI Interface**
+5. **GUI Interface**
    - Tauri-based GUI with visual project organization
    - PDF preview in app
-
-### OCR Implementation Details
-
-The OCR overlay tier is **implemented** behind `--features ocr`. See the [OCR Overlay Tier](#ocr-overlay-tier-srcpdfocr-rs) section above for architecture details.
-
-**Crate selection rationale:**
-
-| Crate | Role | Why chosen |
-|-------|------|------------|
-| **`oar-ocr`** (v0.6) | OCR engine | PaddleOCR v5 via ONNX Runtime. Supports per-region bounding boxes with confidence scores. Language-agnostic detection; language-specific recognition via swappable models. |
-| **`pdfium-render`** (v0.8) | PDF → image | Google PDFium via FFI — the only native dependency, accepted because pure-Rust PDF rasterization doesn't exist at comparable quality. |
-| **`ort`** (v2.0.0-rc.12) | ONNX Runtime | `load-dynamic` mode avoids static linking ABI issues — loads `onnxruntime.dll` at runtime. |
-
-**Non-English support:** Users can swap recognition model and dictionary via `ARCANE_OCR_REC_MODEL` and `ARCANE_OCR_DICT` env vars for other languages (e.g. Chinese, Japanese).
-
-**Error handling:** When OCR is not compiled in, `pipeline.rs` logs a warning and returns an empty result:
-```
-[arcane] Scanned PDF detected — OCR support not available.
-         Rebuild with: cargo build --release --features ocr
-```
 
 ### Contributing to Roadmap
 

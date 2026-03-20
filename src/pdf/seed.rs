@@ -11,7 +11,7 @@
 //!    the reference pages and the *target* PDF, even when the target has garbled
 //!    text.  Returns an `(offset, confidence)` pair.
 //!
-//! 3. Call [`verify_seeds_ocr`] (feature="ocr") or [`resolve_seeds`] to locate
+//! 3. Call [`resolve_seeds`] to locate
 //!    each chapter in the target PDF and produce a `Vec<ResolvedSeed>`.
 //!
 //! 4. Call [`seeds_to_headings`] to convert the resolved seeds into
@@ -62,7 +62,7 @@ pub struct ResolvedSeed {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SeedStatus {
-    /// Text search or OCR confirmed the title on this page (similarity ≥ threshold).
+    /// Text search confirmed the title on this page (similarity ≥ threshold).
     Confirmed,
     /// No text match was found; the page was estimated by applying the consensus
     /// offset to the reference page number.
@@ -291,114 +291,6 @@ pub fn resolve_seeds(
             }
         })
         .collect()
-}
-
-// ---------------------------------------------------------------------------
-// Seed resolution (OCR path, feature-gated)
-// ---------------------------------------------------------------------------
-
-/// Locate each seed title using OCR rendering of the target PDF pages.
-///
-/// Only compiled when the `ocr` Cargo feature is enabled.
-///
-/// Renders all candidate pages at 150 DPI, runs OCR, and fuzzy-matches the
-/// recognised text against seed titles.  Much more reliable than the
-/// `resolve_seeds` text-extraction path for PDFs with broken font encoding.
-#[cfg(feature = "ocr")]
-pub fn verify_seeds_ocr(
-    seeds: &[SeedEntry],
-    offset: i32,
-    target_path: &Path,
-    fuzzy_threshold: f64,
-    tolerance: u32,
-    total_pages: u32,
-) -> Result<Vec<ResolvedSeed>> {
-    use super::ocr;
-    let tol = tolerance as i32;
-
-    // Collect the unique set of candidate page indices to OCR.
-    let mut candidate_pages: Vec<u32> = seeds
-        .iter()
-        .flat_map(|seed| {
-            let base = seed.ref_page as i32 + offset;
-            (-tol..=tol).filter_map(move |d| {
-                let p = base + d;
-                if p >= 0 && (p as u32) < total_pages {
-                    Some(p as u32)
-                } else {
-                    None
-                }
-            })
-        })
-        .collect();
-    candidate_pages.sort_unstable();
-    candidate_pages.dedup();
-
-    // Run OCR on all candidate pages at once.
-    let ocr_results =
-        ocr::extract_headings_ocr(target_path, &candidate_pages, 150).context("OCR failed")?;
-
-    // For each seed, find the best OCR match within the tolerance window.
-    let results = seeds
-        .iter()
-        .map(|seed| {
-            let base = seed.ref_page as i32 + offset;
-            if base < 0 || (base as u32) >= total_pages {
-                return ResolvedSeed {
-                    title: seed.title.clone(),
-                    target_page: base.max(0) as u32,
-                    depth_level: seed.depth_level,
-                    status: SeedStatus::OutOfRange,
-                    similarity: 0.0,
-                };
-            }
-
-            let mut best_page = base as u32;
-            let mut best_sim = 0.0f64;
-
-            for d in -tol..=tol {
-                let p = base + d;
-                if p < 0 || (p as u32) >= total_pages {
-                    continue;
-                }
-                let p_u32 = p as u32;
-                // Collect all OCR text on this page and find the best line match.
-                let page_text: String = ocr_results
-                    .iter()
-                    .filter(|pt| pt.page_index == p_u32)
-                    .map(|pt| pt.text.as_str())
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                let sim = best_line_similarity(&seed.title, &page_text);
-                if sim > best_sim {
-                    best_sim = sim;
-                    best_page = p_u32;
-                }
-            }
-
-            let status = if best_sim >= fuzzy_threshold {
-                SeedStatus::Confirmed
-            } else {
-                SeedStatus::Estimated
-            };
-
-            let target_page = if status == SeedStatus::Estimated {
-                base as u32
-            } else {
-                best_page
-            };
-
-            ResolvedSeed {
-                title: seed.title.clone(),
-                target_page,
-                depth_level: seed.depth_level,
-                status,
-                similarity: best_sim,
-            }
-        })
-        .collect();
-
-    Ok(results)
 }
 
 // ---------------------------------------------------------------------------

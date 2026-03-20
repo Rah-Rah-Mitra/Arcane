@@ -1,6 +1,3 @@
-# Force the MSVC 14.44 linker from BuildTools (avoids the older VS Community 14.39
-# being picked up, which lacks the __std_find_last_of_trivial_pos_1 symbol required
-# by the prebuilt ONNX Runtime static lib in ort-sys).
 [target.x86_64-pc-windows-msvc]
 # Allow rustc to pick the available MSVC linker on the runner instead of
 # pinning a specific toolchain path that may not exist (e.g., 14.44.x).
