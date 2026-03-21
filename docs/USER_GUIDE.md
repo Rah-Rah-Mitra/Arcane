@@ -102,6 +102,14 @@ arcane add "Algorithms" ~/Documents/clrs.pdf --textbook --start-page 12
 
 This helps Arcane correctly map the printed page numbers to the PDF pages.
 
+If you want to persist the table-of-contents page span for later inspection via `arcane show`, provide the TOC range explicitly:
+
+```bash
+arcane add "Algorithms" ~/Documents/clrs.pdf --textbook --toc-start-page 14 --toc-end-page 20
+```
+
+TOC range pages are 1-based, and both flags must be provided together.
+
 ### Splitting Textbooks into Chapters
 
 After adding textbooks, split them into chapters:
@@ -160,7 +168,7 @@ arcane list
 
 ### `arcane show <project>`
 
-Shows detailed information about a project, including source metadata such as chunking depth, page count, and number of chunks generated.
+Shows detailed information about a project, including source metadata such as chunking depth, page count, TOC page range (when present), and number of chunks generated.
 
 **Example:**
 ```bash
@@ -177,6 +185,7 @@ Sources :
     chapter_map = 34 entries
     depth = 2
     page_count = 1312
+    contents_page_range = 14 to 20
     chunks = 34
 ```
 
@@ -187,6 +196,8 @@ Adds a PDF source to a project.
 **Options:**
 - `--textbook`: Mark the source as a textbook that needs chunking
 - `--start-page N`: Physical page index where printed Page 1 starts (for textbooks with front matter)
+- `--toc-start-page N`: 1-based start page of the table of contents
+- `--toc-end-page N`: 1-based end page of the table of contents
 - `--title T`: Override the display title (defaults to filename)
 - `--tag TAG`: Add a tag to the project (can be repeated, e.g. `--tag math --tag algorithms`)
 - `--type TYPE`: Source type label: textbook, report, paper, cheatsheet, or any custom string
@@ -206,6 +217,11 @@ arcane add "Algorithms" ~/Books/algorithms.pdf --textbook
 Add a textbook with front matter:
 ```bash
 arcane add "Algorithms" ~/Books/book.pdf --textbook --start-page 15
+```
+
+Add a textbook with TOC page range metadata:
+```bash
+arcane add "Algorithms" ~/Books/book.pdf --textbook --toc-start-page 14 --toc-end-page 20
 ```
 
 Add with a custom title and tags:

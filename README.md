@@ -37,6 +37,8 @@ arcane new "Rust-Programming"
 # 2. Add sources  (relative or absolute paths work)
 arcane add "Rust-Programming" path/to/textbook.pdf --textbook
 arcane add "Rust-Programming" path/to/paper.pdf              # report (no chunking)
+# Optional: record where the table of contents appears (1-based pages)
+arcane add "Rust-Programming" path/to/textbook.pdf --textbook --toc-start-page 14 --toc-end-page 20
 
 # 3. Inspect the PDF's outline before chunking
 arcane outline path/to/textbook.pdf --depth 3
@@ -108,10 +110,10 @@ Chapter PDFs are written to `~/Arcane/Library/<Project>/Chunks/<Source>/`.
 |---------|-------------|
 | `arcane new <name>` | Create a new project |
 | `arcane list` | List all projects and their sources |
-| `arcane show <name>` | Show detailed project info |
+| `arcane show <name>` | Show detailed project info, including optional TOC page range (`contents_page_range`) when set |
 | `arcane tag <project> <tag>` | Add a tag to a project |
 | `arcane untag <project> <tag>` | Remove a tag from a project |
-| `arcane add <project> <path> [--textbook] [--start-page N] [--title "…"] [--tag TAG]… [--type TYPE]` | Add a source PDF. `--tag` is repeatable. `TYPE`: textbook \| report \| paper \| cheatsheet \| custom string |
+| `arcane add <project> <path> [--textbook] [--start-page N] [--toc-start-page N --toc-end-page N] [--title "…"] [--tag TAG]… [--type TYPE]` | Add a source PDF. `--tag` is repeatable. `TYPE`: textbook \| report \| paper \| cheatsheet \| custom string. TOC range pages are 1-based and must be provided together. |
 | `arcane chunk <project> [--force] [--depth N] [--dry-run] [--source S]` | Split textbooks into per-chapter PDFs. `--depth` default: 1 (1 = top-level chapters, 2+ = sub-sections) |
 | `arcane list-chunks <project> [source]` | List chunk files for a source (or all sources if omitted) |
 | `arcane search <query> [--limit N] [--project P] [--source S]` | Full-text search across all indexed sources. `--limit` default: 10 |

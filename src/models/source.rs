@@ -10,6 +10,13 @@ use std::path::PathBuf;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
+/// 1-based page range where the table of contents appears in the source PDF.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ContentsPageRange {
+    pub start: u32,
+    pub end: u32,
+}
+
 // ---------------------------------------------------------------------------
 // Source metadata (persisted)
 // ---------------------------------------------------------------------------
@@ -48,6 +55,10 @@ pub struct SourceMeta {
     /// `None` if not yet determined.
     #[serde(default)]
     pub page_count: Option<u32>,
+
+    /// Optional 1-based page range containing the document's table of contents.
+    #[serde(default)]
+    pub contents_page_range: Option<ContentsPageRange>,
 }
 
 impl SourceMeta {
@@ -61,6 +72,7 @@ impl SourceMeta {
             start_page_physical: None,
             depth: None,
             page_count: None,
+            contents_page_range: None,
         }
     }
 
@@ -79,6 +91,7 @@ impl SourceMeta {
             start_page_physical,
             depth: None,
             page_count: None,
+            contents_page_range: None,
         }
     }
 }

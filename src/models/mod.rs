@@ -8,4 +8,4 @@ mod source;
 mod tags;
 
 pub use project::Project;
-pub use source::{build_source, SourceMeta};
+pub use source::{build_source, ContentsPageRange, SourceMeta};

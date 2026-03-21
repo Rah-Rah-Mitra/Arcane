@@ -48,6 +48,14 @@ pub enum Commands {
         #[arg(long)]
         start_page: Option<u32>,
 
+        /// 1-based start page of the table of contents.
+        #[arg(long)]
+        toc_start_page: Option<u32>,
+
+        /// 1-based end page of the table of contents.
+        #[arg(long)]
+        toc_end_page: Option<u32>,
+
         /// Override the source display title.
         #[arg(long)]
         title: Option<String>,

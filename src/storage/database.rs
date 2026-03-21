@@ -451,6 +451,7 @@ impl Database {
                 start_page_physical: start_page.map(|v| v as u32),
                 depth: depth.map(|v| v as u32),
                 page_count: page_count.map(|v| v as u32),
+                contents_page_range: None,
             };
             result.push(meta);
         }

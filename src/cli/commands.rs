@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use rayon::prelude::*;
 
-use crate::models::{build_source, Project, SourceMeta};
+use crate::models::{build_source, ContentsPageRange, Project, SourceMeta};
 use crate::search::SearchIndex;
 use crate::storage::{self, cas, Database, ProjectStore};
 
@@ -82,6 +82,12 @@ pub fn cmd_show(name: &str) -> Result<()> {
         }
         if let Some(page_count) = s.page_count {
             println!("    page_count = {page_count}");
+        }
+        if let Some(range) = s.contents_page_range {
+            println!(
+                "    contents_page_range = {} to {}",
+                range.start, range.end
+            );
         }
         // Count chunks if they exist
         if s.needs_chunking {
@@ -297,6 +303,8 @@ pub fn cmd_add(
     path: PathBuf,
     is_textbook: bool,
     start_page: Option<u32>,
+    toc_start_page: Option<u32>,
+    toc_end_page: Option<u32>,
     title_override: Option<String>,
     tags: Vec<String>,
     source_type_override: Option<String>,
@@ -316,11 +324,26 @@ pub fn cmd_add(
         "Report"
     };
 
-    let meta = if is_textbook {
+    let contents_page_range = match (toc_start_page, toc_end_page) {
+        (Some(start), Some(end)) => {
+            if start == 0 || end == 0 {
+                anyhow::bail!("--toc-start-page and --toc-end-page must be 1-based and greater than 0");
+            }
+            if start > end {
+                anyhow::bail!("--toc-start-page cannot be greater than --toc-end-page");
+            }
+            Some(ContentsPageRange { start, end })
+        }
+        (None, None) => None,
+        _ => anyhow::bail!("--toc-start-page and --toc-end-page must be provided together"),
+    };
+
+    let mut meta = if is_textbook {
         SourceMeta::textbook(title.clone(), path.clone(), HashMap::new(), start_page)
     } else {
         SourceMeta::report(title.clone(), path.clone())
     };
+    meta.contents_page_range = contents_page_range;
 
     let chapter_map_json =
         serde_json::to_string(&meta.chapter_map).unwrap_or_else(|_| "{}".to_string());

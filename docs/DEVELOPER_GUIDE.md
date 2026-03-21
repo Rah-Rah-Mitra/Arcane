@@ -145,6 +145,7 @@ The CLI layer uses `clap` derive macros for declarative command definitions in `
 **Example Command Flow:**
 ```
 arcane add "Project" book.pdf --textbook --start-page 12
+arcane add "Project" book.pdf --textbook --toc-start-page 14 --toc-end-page 20
      ↓
 cmd_add() via clap dispatch
      ↓
@@ -180,6 +181,15 @@ pub struct SourceMeta {
     pub start_page_physical: Option<u32>,   // Offset for page numbering
     pub depth: Option<u32>,                 // Outline depth used for last chunk
     pub page_count: Option<u32>,            // Total pages in the PDF
+    pub contents_page_range: Option<ContentsPageRange>, // Optional 1-based TOC page span
+}
+```
+
+**`ContentsPageRange`** (src/models/source.rs)
+```rust
+pub struct ContentsPageRange {
+    pub start: u32, // 1-based TOC start page
+    pub end: u32,   // 1-based TOC end page
 }
 ```
 
