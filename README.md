@@ -85,6 +85,20 @@ If a PDF has no bookmarks at all, use `arcane recover-outline` to reconstruct th
 before chunking. You can also use `arcane probe` to classify a PDF and
 `arcane detect-layout` to inspect its structural anchors.
 
+If you run Arcane-PP locally (default `http://127.0.0.1:8000`), Arcane can also
+bootstrap recovery directly from TOC pages:
+
+```bash
+# Parse TOC pages into seed JSON (title/page/depth)
+arcane process-toc ~/Books/textbook.pdf --toc-pages 14-20 --output toc-seed.json
+
+# End-to-end: parse TOC via Arcane-PP, then run outline recovery with seed guidance
+arcane recover ~/Books/textbook.pdf --toc-pages 14-20 --output ~/Books/textbook-fixed.pdf
+
+# Batch recover all sources in a project that still have empty chapter maps
+arcane recover-project "Algorithms"
+```
+
 Use `arcane outline <file>` to inspect a PDF's outline tree and page labels before chunking.
 Use `arcane chunk <project> --dry-run` to preview detected boundaries without writing files.
 
@@ -123,6 +137,9 @@ Chapter PDFs are written to `~/Arcane/Library/<Project>/Chunks/<Source>/`.
 | `arcane detect-layout <file> [--json] [--pages RANGE]` | Detect structural anchors via statistical typographic profiling. `--pages`: 0-based range (e.g. "0-5") |
 | `arcane find-offset <file> [--toc-pages RANGE] [--json]` | Calculate logical-to-physical page offset. `--toc-pages`: 1-based (e.g. "3-5") |
 | `arcane sync-pages <file> [--toc-pages RANGE] [--threshold T] [--json]` | RANSAC consensus offset from heading↔TOC matching. `--threshold` default: 0.6 (range: 0.0–1.0). `--toc-pages`: 1-based |
+| `arcane process-toc <file> --toc-pages RANGE [--server URL] [--output FILE] [--depth N]` | Extract TOC pages and parse them through Arcane-PP `/parse-toc`, producing JSON seed entries (`title`, `page`, `depth`). `--server` default: `http://127.0.0.1:8000`; `--depth` default: 2 |
+| `arcane recover <file> --toc-pages RANGE [--server URL] [--output FILE] [--depth N] [--dry-run]` | One-step TOC-assisted recovery: parse TOC with Arcane-PP and run `recover-outline` with generated seed data |
+| `arcane recover-project <project> [--server URL] [--depth N] [--dry-run] [--arcane-data DIR]` | Batch TOC-assisted recovery for sources in a project whose `chapter_map` is empty and `contents_page_range` is present |
 | `arcane recover-outline <file> [--output PATH] [--dry-run] [--min-font-ratio R] [--depth N] [--toc-pages RANGE] [--no-inject] [--fuzzy-threshold T] [--json] [--seed-pdf PDF] [--seed-file JSON] [--seed-tolerance N] [--toc-start-page N] [--toc-end-page N]` | Recover and inject outline bookmarks. `--min-font-ratio` default: 1.2. `--depth` default: 2 (1 = chapters, 2 = +sections). `--fuzzy-threshold` default: 0.6 (0.0–1.0). `--seed-tolerance` default: 5 |
 | `arcane remove <project> [source]` | Remove a source or entire project (if source omitted) |
 | `arcane merge <output> <inputs…>` | Merge multiple PDF files into one |

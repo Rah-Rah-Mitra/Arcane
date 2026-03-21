@@ -11,6 +11,7 @@
 //! ```
 
 mod cli;
+mod bridge;
 mod error;
 mod models;
 mod pdf;
@@ -134,6 +135,28 @@ fn main() -> anyhow::Result<()> {
             toc_pages,
             json,
         } => commands::cmd_find_offset(file, toc_pages, json),
+        Commands::ProcessToc {
+            pdf,
+            toc_pages,
+            server,
+            output,
+            depth,
+        } => commands::cmd_process_toc(pdf, &toc_pages, &server, output, depth),
+        Commands::Recover {
+            pdf,
+            toc_pages,
+            server,
+            output,
+            depth,
+            dry_run,
+        } => commands::cmd_recover(pdf, &toc_pages, &server, output, depth, dry_run),
+        Commands::RecoverProject {
+            project,
+            server,
+            depth,
+            dry_run,
+            arcane_data,
+        } => commands::cmd_recover_project(&project, &server, depth, dry_run, arcane_data),
         Commands::Protect {
             input,
             password,

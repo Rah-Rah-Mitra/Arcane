@@ -243,6 +243,81 @@ pub enum Commands {
         json: bool,
     },
 
+    /// OCR TOC pages of a PDF and output a seed JSON for outline recovery.
+    ProcessToc {
+        /// Path to the source PDF.
+        pdf: PathBuf,
+
+        /// 1-based physical TOC page range, e.g. "7-18".
+        #[arg(long)]
+        toc_pages: String,
+
+        /// Arcane-PP server URL.
+        #[arg(long, default_value = "http://localhost:5000")]
+        server: String,
+
+        /// Write seed JSON to this file instead of stdout.
+        #[arg(long, short = 'o')]
+        output: Option<PathBuf>,
+
+        /// Preferred injection depth for downstream outline recovery.
+        ///
+        /// Seed generation preserves all parsed depths.
+        #[arg(long, default_value_t = 2)]
+        depth: u32,
+    },
+
+    /// Full bridge pipeline: extract TOC pages, parse entries, and recover
+    /// outline bookmarks in one command.
+    Recover {
+        /// Path to the source PDF.
+        pdf: PathBuf,
+
+        /// 1-based physical TOC page range, e.g. "7-18".
+        #[arg(long)]
+        toc_pages: String,
+
+        /// Arcane-PP server URL.
+        #[arg(long, default_value = "http://localhost:5000")]
+        server: String,
+
+        /// Output PDF path. Defaults to overwriting the input file.
+        #[arg(long, short = 'o')]
+        output: Option<PathBuf>,
+
+        /// Maximum hierarchy depth to inject into outline bookmarks.
+        #[arg(long, default_value_t = 2)]
+        depth: u32,
+
+        /// Preview only — do not modify any file.
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Batch outline recovery for a project's sources with empty chapter maps
+    /// and known TOC page ranges.
+    RecoverProject {
+        /// Arcane project name to process.
+        #[arg(long, default_value = "Computer-Vision")]
+        project: String,
+
+        /// Arcane-PP server URL.
+        #[arg(long, default_value = "http://localhost:5000")]
+        server: String,
+
+        /// Maximum hierarchy depth to inject into outline bookmarks.
+        #[arg(long, default_value_t = 2)]
+        depth: u32,
+
+        /// Preview only — do not modify any file.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Arcane data root containing projects.json. Defaults to ~/Arcane.
+        #[arg(long)]
+        arcane_data: Option<PathBuf>,
+    },
+
     /// Recover PDF outline bookmarks using font-size heuristics.
     ///
     /// Useful for PDFs that have no /Outlines and no /PageLabels (e.g. LaTeX

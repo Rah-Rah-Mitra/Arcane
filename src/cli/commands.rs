@@ -822,6 +822,207 @@ pub fn cmd_find_offset(
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Bridge-equivalent commands
+// ---------------------------------------------------------------------------
+
+pub fn cmd_process_toc(
+    pdf: PathBuf,
+    toc_pages: &str,
+    server: &str,
+    output: Option<PathBuf>,
+    depth: u32,
+) -> Result<()> {
+    let entries = extract_toc_entries(&pdf, toc_pages, server, depth)?;
+    let json = serde_json::to_string_pretty(&entries).context("failed to serialise seed JSON")?;
+
+    match output {
+        Some(path) => {
+            std::fs::write(&path, json)
+                .with_context(|| format!("failed to write seed JSON to {}", path.display()))?;
+            println!("[arcane] Seed JSON written to {}", path.display());
+        }
+        None => println!("{json}"),
+    }
+
+    Ok(())
+}
+
+pub fn cmd_recover(
+    pdf: PathBuf,
+    toc_pages: &str,
+    server: &str,
+    output: Option<PathBuf>,
+    depth: u32,
+    dry_run: bool,
+) -> Result<()> {
+    let entries = extract_toc_entries(&pdf, toc_pages, server, depth)?;
+
+    let temp_seed = temp_file_path("bridge-seed", "json");
+    let seed_json = serde_json::to_string_pretty(&entries).context("failed to serialise seed JSON")?;
+    std::fs::write(&temp_seed, seed_json).with_context(|| {
+        format!(
+            "failed to write temporary seed JSON {}",
+            temp_seed.display()
+        )
+    })?;
+
+    let recover_result = cmd_recover_outline(
+        pdf,
+        output,
+        dry_run,
+        1.2,
+        depth,
+        Some(toc_pages.to_string()),
+        false,
+        0.6,
+        false,
+        None,
+        Some(temp_seed.clone()),
+        5,
+        None,
+        None,
+    );
+
+    let _ = std::fs::remove_file(&temp_seed);
+    recover_result
+}
+
+pub fn cmd_recover_project(
+    project: &str,
+    server: &str,
+    depth: u32,
+    dry_run: bool,
+    arcane_data: Option<PathBuf>,
+) -> Result<()> {
+    let arcane_data = resolve_arcane_data(arcane_data)?;
+    let store = crate::bridge::projects::load_projects(&arcane_data)?;
+    let sources = crate::bridge::projects::sources_needing_recovery(&store, project);
+
+    if sources.is_empty() {
+        println!(
+            "[arcane] No sources in project '{project}' need recovery (either chapter_map is populated or TOC page ranges are missing)."
+        );
+        return Ok(());
+    }
+
+    println!(
+        "[arcane] Project '{project}': {} source(s) need recovery{}",
+        sources.len(),
+        if dry_run { " (dry-run)" } else { "" }
+    );
+
+    let mut success = 0usize;
+    let mut failed = 0usize;
+
+    for source in &sources {
+        let toc = source.contents_page_range.as_ref().expect("filtered above");
+        let toc_pages = format!("{}-{}", toc.start, toc.end);
+        let pdf = source.pdf_path();
+
+        println!("\n[arcane] -- {} --", source.title);
+        println!("[arcane]    PDF: {}", pdf.display());
+        println!("[arcane]    TOC pages: {toc_pages}");
+
+        match cmd_recover(pdf, &toc_pages, server, None, depth, dry_run) {
+            Ok(()) => {
+                println!("[arcane]    done");
+                success += 1;
+            }
+            Err(err) => {
+                println!("[arcane]    error: {err:#}");
+                failed += 1;
+            }
+        }
+    }
+
+    println!("\n[arcane] Finished - {success} succeeded, {failed} failed.");
+    if failed > 0 {
+        anyhow::bail!("{failed} source(s) failed recovery");
+    }
+
+    Ok(())
+}
+
+fn extract_toc_entries(
+    pdf: &Path,
+    toc_pages: &str,
+    server: &str,
+    depth: u32,
+) -> Result<Vec<crate::bridge::toc::TocEntry>> {
+    let (start, end) = parse_toc_range_1based(toc_pages)?;
+
+    println!(
+        "[arcane] Extracting TOC pages {start}-{end} from {} ...",
+        pdf.display()
+    );
+    let temp_toc_pdf = temp_file_path("bridge-toc", "pdf");
+    crate::bridge::pdf::extract_pages(pdf, start, end, &temp_toc_pdf)?;
+
+    println!("[arcane] Sending extracted TOC pages to Arcane-PP at {server} ...");
+    let parsed = crate::bridge::client::parse_toc_entries(server, &temp_toc_pdf);
+    let _ = std::fs::remove_file(&temp_toc_pdf);
+
+    let entries = parsed?;
+    if entries.is_empty() {
+        anyhow::bail!(
+            "No TOC entries could be extracted. Check --toc-pages {toc_pages} and Arcane-PP server {server}."
+        );
+    }
+
+    let max_depth = entries.iter().map(|e| e.depth).max().unwrap_or(1);
+    println!(
+        "[arcane] Parsed {} TOC entries (seed max depth {}, requested inject depth {}).",
+        entries.len(),
+        max_depth,
+        depth
+    );
+    Ok(entries)
+}
+
+fn parse_toc_range_1based(s: &str) -> Result<(u32, u32)> {
+    let parts: Vec<&str> = s.splitn(2, '-').collect();
+    if parts.len() != 2 {
+        anyhow::bail!(
+            "--toc-pages must be in START-END format (for example, 7-18), got: {s:?}"
+        );
+    }
+
+    let start: u32 = parts[0]
+        .trim()
+        .parse()
+        .with_context(|| format!("invalid start page in --toc-pages {s:?}"))?;
+    let end: u32 = parts[1]
+        .trim()
+        .parse()
+        .with_context(|| format!("invalid end page in --toc-pages {s:?}"))?;
+
+    if start == 0 || start > end {
+        anyhow::bail!("--toc-pages start must be >= 1 and <= end, got: {s:?}");
+    }
+
+    Ok((start, end))
+}
+
+fn resolve_arcane_data(override_path: Option<PathBuf>) -> Result<PathBuf> {
+    if let Some(path) = override_path {
+        return Ok(path);
+    }
+    let home = crate::storage::filesystem::dirs_home()
+        .context("could not determine home directory; pass --arcane-data explicitly")?;
+    Ok(home.join("Arcane"))
+}
+
+fn temp_file_path(prefix: &str, extension: &str) -> PathBuf {
+    let mut path = std::env::temp_dir();
+    path.push(format!(
+        "arcane-{prefix}-{}.{}",
+        uuid::Uuid::new_v4(),
+        extension
+    ));
+    path
+}
+
 /// Parse a "start-end" range string (1-based) into a 0-based inclusive tuple.
 fn parse_page_range(s: &str) -> Option<(u32, u32)> {
     let parts: Vec<&str> = s.split('-').collect();
@@ -838,6 +1039,33 @@ fn parse_page_range(s: &str) -> Option<(u32, u32)> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_page_range, parse_toc_range_1based};
+
+    #[test]
+    fn parse_toc_range_accepts_valid_input() {
+        let parsed = parse_toc_range_1based("7-18").expect("expected valid range");
+        assert_eq!(parsed, (7, 18));
+    }
+
+    #[test]
+    fn parse_toc_range_rejects_zero_start() {
+        assert!(parse_toc_range_1based("0-5").is_err());
+    }
+
+    #[test]
+    fn parse_toc_range_rejects_reversed_range() {
+        assert!(parse_toc_range_1based("12-4").is_err());
+    }
+
+    #[test]
+    fn parse_page_range_converts_to_zero_based() {
+        assert_eq!(parse_page_range("3-5"), Some((2, 4)));
+        assert_eq!(parse_page_range("9"), Some((8, 8)));
+    }
 }
 
 // ---------------------------------------------------------------------------

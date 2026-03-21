@@ -4,6 +4,7 @@
 //! including chunking, search indexing, and storage.
 
 pub mod cli;
+pub mod bridge;
 pub mod error;
 pub mod models;
 pub mod pdf;

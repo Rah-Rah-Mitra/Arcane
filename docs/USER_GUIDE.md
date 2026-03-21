@@ -514,6 +514,81 @@ Matches:
 - `find-offset` is faster and works well when `/PageLabels` exists or the TOC is small.
 - `sync-pages` is the right choice for books with no `/PageLabels`, large/complex TOCs, or when you need a match confidence table for verification.
 
+### `arcane process-toc <file> --toc-pages START-END [options]`
+
+Extracts the specified TOC page range from a PDF and sends it to Arcane-PP (`/parse-toc`) to produce a seed JSON array suitable for `recover-outline --seed-file`.
+
+**Options:**
+- `--toc-pages START-END`: Required TOC page range, 1-based (for example, `14-20`)
+- `--server URL`: Arcane-PP base URL (default: `http://127.0.0.1:8000`)
+- `--output PATH`: Write seed JSON to file (prints to stdout when omitted)
+- `--depth N`: Target injection depth hint used in status reporting (default: 2)
+
+**Examples:**
+```bash
+# Print seed JSON to stdout
+arcane process-toc ~/Books/textbook.pdf --toc-pages 14-20
+
+# Write seed JSON to disk
+arcane process-toc ~/Books/textbook.pdf --toc-pages 14-20 --output toc-seed.json
+```
+
+**Seed JSON format:**
+```json
+[
+  {"title": "1 Introduction", "page": 1, "depth": 1},
+  {"title": "1.1 Motivation", "page": 3, "depth": 2}
+]
+```
+
+### `arcane recover <file> --toc-pages START-END [options]`
+
+Runs TOC-assisted outline recovery in one command:
+
+1. Extract TOC pages from the input PDF
+2. Parse TOC entries through Arcane-PP
+3. Generate a temporary seed JSON
+4. Run `recover-outline` with that seed
+
+**Options:**
+- `--toc-pages START-END`: Required TOC page range, 1-based
+- `--server URL`: Arcane-PP base URL (default: `http://127.0.0.1:8000`)
+- `--output PATH`: Output PDF path (overwrites input when omitted)
+- `--depth N`: Recovery depth (default: 2)
+- `--dry-run`: Preview recovered outline without writing changes
+
+**Examples:**
+```bash
+# Preview recovered headings only
+arcane recover ~/Books/textbook.pdf --toc-pages 14-20 --dry-run
+
+# Write fixed PDF
+arcane recover ~/Books/textbook.pdf --toc-pages 14-20 --output ~/Books/textbook-fixed.pdf
+```
+
+### `arcane recover-project <project> [options]`
+
+Batch version of `recover` for project sources that:
+- have an empty `chapter_map`
+- have a recorded TOC range (`contents_page_range`)
+
+This command is useful after importing many textbooks with `--toc-start-page/--toc-end-page` but before chunking.
+
+**Options:**
+- `--server URL`: Arcane-PP base URL (default: `http://127.0.0.1:8000`)
+- `--depth N`: Recovery depth (default: 2)
+- `--dry-run`: Run recovery pipeline without writing PDFs
+- `--arcane-data DIR`: Override Arcane data root (defaults to `~/Arcane`)
+
+**Examples:**
+```bash
+# Dry-run batch recovery
+arcane recover-project "Algorithms" --dry-run
+
+# Recover all eligible sources and write changes in place
+arcane recover-project "Algorithms"
+```
+
 ### `arcane recover-outline <file> [options]`
 
 Recovers and injects outline bookmarks into PDFs that have no `/Outlines`, using a tiered pipeline:

@@ -44,6 +44,12 @@ Arcane is designed as a local-first application with a simple three-layer archit
 src/
 ├── main.rs                 # CLI entry point and command dispatch
 ├── error.rs                # Typed error hierarchy (thiserror)
+├── bridge/
+│   ├── mod.rs              # Bridge module exports
+│   ├── client.rs           # Arcane-PP HTTP client for /parse-toc
+│   ├── pdf.rs              # TOC page extraction helper
+│   ├── projects.rs         # Project metadata loading/filtering for batch recovery
+│   └── toc.rs              # TOC entry schema (title/page/depth)
 ├── cli/
 │   ├── mod.rs              # Clap command definitions
 │   ├── commands.rs         # Command handler implementations
@@ -106,6 +112,7 @@ src/
 - `strsim` (0.11) - Fuzzy string matching (Levenshtein, Jaro-Winkler) for outline verification
 - `chrono` (0.4) - Timestamps
 - `uuid` (1) - Unique IDs
+- `reqwest` (0.12, blocking + rustls) - Arcane-PP integration for TOC parsing
 - `tracing` + `tracing-subscriber` - Structured logging
 - `notify` (7) - File system watching
 - `ratatui` (0.29) - Terminal UI framework
@@ -132,6 +139,9 @@ The CLI layer uses `clap` derive macros for declarative command definitions in `
 - `cmd_probe()`: Classifies a PDF as text-based, scanned, or mixed
 - `cmd_detect_layout()`: Statistical typographic profiling + multi-heuristic structural classification
 - `cmd_find_offset()`: Calculates logical-to-physical page offset
+- `cmd_process_toc()`: Extracts TOC pages and parses entries through Arcane-PP `/parse-toc`
+- `cmd_recover()`: End-to-end TOC-assisted recovery (`process-toc` + `recover-outline`)
+- `cmd_recover_project()`: Batch TOC-assisted recovery for sources that still need chapter maps
 - `cmd_recover_outline()`: Full outline recovery pipeline (probe → profile → classify → offset → verify → inject)
 - `cmd_sync_pages()`: RANSAC-style heading↔TOC consensus offset with inlier table
 - `cmd_reindex()`: Rebuilds the search index
