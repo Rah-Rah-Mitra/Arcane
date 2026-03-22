@@ -541,8 +541,11 @@ pub fn cmd_recover_outline(
     seed_pdf: Option<std::path::PathBuf>,
     seed_file: Option<std::path::PathBuf>,
     seed_tolerance: u32,
+    offset_tolerance: u32,
     toc_start_page: Option<u32>,
     toc_end_page: Option<u32>,
+    page_one: Option<u32>,
+    anchor: Vec<(u32, u32)>,
 ) -> Result<()> {
     use crate::pdf::pipeline::{self, RecoveryConfig};
     use crate::pdf::seed;
@@ -588,6 +591,9 @@ pub fn cmd_recover_outline(
         inject: !no_inject,
         fuzzy_threshold,
         page_shift_tolerance: seed_tolerance,
+        offset_tolerance,
+        user_offset: page_one.map(|p| p as i32 - 1),
+        user_anchors: anchor,
     };
 
     let path_str = file.display().to_string();
@@ -880,8 +886,11 @@ pub fn cmd_recover(
         None,
         Some(temp_seed.clone()),
         5,
+        50, // offset_tolerance: default for bridge path
         None,
         None,
+        None,    // page_one: not available from bridge path
+        vec![],  // anchor: not available from bridge path
     );
 
     let _ = std::fs::remove_file(&temp_seed);
@@ -1021,6 +1030,19 @@ fn temp_file_path(prefix: &str, extension: &str) -> PathBuf {
         extension
     ));
     path
+}
+
+/// Parse a "LOGICAL:PHYSICAL" anchor string into a (logical_1based, physical_1based) pair.
+pub fn parse_anchor_pair(s: &str) -> Result<(u32, u32), String> {
+    let (l, r) = s
+        .split_once(':')
+        .ok_or_else(|| format!("expected LOGICAL:PHYSICAL, got {s:?}"))?;
+    let logical: u32 = l.trim().parse().map_err(|e: std::num::ParseIntError| e.to_string())?;
+    let physical: u32 = r.trim().parse().map_err(|e: std::num::ParseIntError| e.to_string())?;
+    if logical == 0 || physical == 0 {
+        return Err("page numbers must be >= 1".into());
+    }
+    Ok((logical, physical))
 }
 
 /// Parse a "start-end" range string (1-based) into a 0-based inclusive tuple.

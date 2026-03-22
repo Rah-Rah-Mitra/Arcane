@@ -38,6 +38,17 @@ pub struct RecoveryConfig {
     pub fuzzy_threshold: f64,
     /// ±N page tolerance window when locating seeds in the target PDF.
     pub page_shift_tolerance: u32,
+    /// Search range for the seed-offset vote.  Independent of `page_shift_tolerance`
+    /// so that large physical offsets (e.g. 20+ pages of front matter) are found
+    /// automatically without widening the per-seed page-search window.
+    pub offset_tolerance: u32,
+    /// User-supplied base offset (physical_0based = logical_page - 1 + offset).
+    /// When set, bypasses seed-offset voting entirely.
+    pub user_offset: Option<i32>,
+    /// Per-segment page pivot points (logical_1based, physical_1based).
+    /// After seed resolution, Estimated seeds use the local offset of the
+    /// nearest anchor at or before their logical position.
+    pub user_anchors: Vec<(u32, u32)>,
 }
 
 /// Full pipeline result.
@@ -196,75 +207,126 @@ pub fn recover_outline_seeded(
     let probe_result = probe::probe(doc, path);
 
     // Phase 2: Offset from seeds.
+    // If the user supplied --page-one, use it directly (confidence 1.0) and skip
+    // the voting step entirely.  Otherwise run the consensus vote.
     // Use a lower internal threshold (0.15) for the vote so that even partially-
     // readable text produces a signal.  The full fuzzy_threshold is reserved for
     // seed *verification* (resolve_seeds / verify_seeds_ocr).
-    let vote_threshold = config.fuzzy_threshold.min(0.15);
-    let (offset, seed_offset_result) = match seed::calculate_offset_from_seeds(
-        &seeds,
-        doc,
-        vote_threshold,
-        config.page_shift_tolerance,
-    ) {
-        Some((off, conf)) => {
-            tracing::info!(
-                "Seed offset vote: offset={off} confidence={:.0}%",
-                conf * 100.0
-            );
-            let result = OffsetResult {
-                offset: off,
-                confidence: conf,
-                method: OffsetMethod::SeedBased,
-                evidence: vec![],
-            };
-            (off, Some(result))
-        }
-        None => {
-            tracing::warn!(
-                "Seed offset vote was inconclusive — trying standard offset detection"
-            );
-            let fallback = offset::calculate_offset(doc, None, config.toc_pages);
-            // If the standard detection is very low-confidence (< 30%), default to
-            // offset 0 rather than risking a wildly wrong value that pushes most
-            // seeds out of range.
-            let (off, result) = match fallback {
-                Some(ref r) if r.confidence >= 0.30 => (r.offset, fallback),
-                Some(ref r) => {
-                    tracing::warn!(
-                        "Standard offset detection low-confidence ({:.0}%) — using offset 0",
-                        r.confidence * 100.0
-                    );
-                    let zero = OffsetResult {
-                        offset: 0,
-                        confidence: 0.0,
-                        method: OffsetMethod::SeedBased,
-                        evidence: vec![],
-                    };
-                    (0, Some(zero))
-                }
-                None => {
-                    tracing::warn!("No offset detected — using offset 0");
-                    let zero = OffsetResult {
-                        offset: 0,
-                        confidence: 0.0,
-                        method: OffsetMethod::SeedBased,
-                        evidence: vec![],
-                    };
-                    (0, Some(zero))
-                }
-            };
-            (off, result)
+    let (offset, seed_offset_result) = if let Some(user_off) = config.user_offset {
+        tracing::info!("Using user-supplied offset: {user_off} (--page-one)");
+        let result = OffsetResult {
+            offset: user_off,
+            confidence: 1.0,
+            method: OffsetMethod::UserSupplied,
+            evidence: vec![],
+        };
+        (user_off, Some(result))
+    } else {
+        let vote_threshold = config.fuzzy_threshold.min(0.15);
+        match seed::calculate_offset_from_seeds(
+            &seeds,
+            doc,
+            vote_threshold,
+            config.offset_tolerance,
+        ) {
+            Some((off, conf)) => {
+                tracing::info!(
+                    "Seed offset vote: offset={off} confidence={:.0}%",
+                    conf * 100.0
+                );
+                let result = OffsetResult {
+                    offset: off,
+                    confidence: conf,
+                    method: OffsetMethod::SeedBased,
+                    evidence: vec![],
+                };
+                (off, Some(result))
+            }
+            None => {
+                tracing::warn!(
+                    "Seed offset vote was inconclusive — trying standard offset detection"
+                );
+                let fallback = offset::calculate_offset(doc, None, config.toc_pages);
+                // If the standard detection is very low-confidence (< 30%), default to
+                // offset 0 rather than risking a wildly wrong value that pushes most
+                // seeds out of range.
+                let (off, result) = match fallback {
+                    Some(ref r) if r.confidence >= 0.30 => (r.offset, fallback),
+                    _ => {
+                        // PageLabels / TOC-text / page-number detection inconclusive.
+                        // Last resort: scan ALL text-extractable pages and vote from
+                        // the page side (inverse of calculate_offset_from_seeds).
+                        tracing::warn!(
+                            "Standard offset detection inconclusive — trying page-scan vote"
+                        );
+                        let scan_threshold = config.fuzzy_threshold.max(0.5);
+                        match seed::calculate_offset_by_page_scan(
+                            &seeds,
+                            doc,
+                            scan_threshold,
+                        ) {
+                            Some((off, conf)) => {
+                                tracing::info!(
+                                    "Page-scan offset vote: offset={off} confidence={:.0}%",
+                                    conf * 100.0
+                                );
+                                let result = OffsetResult {
+                                    offset: off,
+                                    confidence: conf,
+                                    method: OffsetMethod::SeedBased,
+                                    evidence: vec![],
+                                };
+                                (off, Some(result))
+                            }
+                            None => {
+                                tracing::warn!("No offset detected — using offset 0");
+                                let zero = OffsetResult {
+                                    offset: 0,
+                                    confidence: 0.0,
+                                    method: OffsetMethod::SeedBased,
+                                    evidence: vec![],
+                                };
+                                (0, Some(zero))
+                            }
+                        }
+                    }
+                };
+                (off, result)
+            }
         }
     };
 
     // Phase 3: Resolve seeds → verified page locations.
-    let resolved = seed::resolve_seeds(
+    let mut resolved = seed::resolve_seeds(
         &seeds,
         offset,
         doc,
         config.fuzzy_threshold,
         config.page_shift_tolerance,
     );
+
+    // Phase 3b: Correct Estimated seeds by nearest-neighbour interpolation
+    //           from Confirmed seeds.  Runs before user anchors so that
+    //           explicit --anchor values can still override the auto result.
+    {
+        let total_pages = doc.get_pages().len() as u32;
+        seed::correct_estimated_by_confirmed_neighbors(&mut resolved, &seeds, total_pages);
+    }
+
+    // Phase 3c: Apply per-segment anchor corrections to Estimated seeds.
+    if !config.user_anchors.is_empty() {
+        let total_pages = doc.get_pages().len() as u32;
+        seed::apply_anchor_corrections(
+            &mut resolved,
+            &seeds,
+            &config.user_anchors,
+            total_pages,
+        );
+        tracing::info!(
+            "Applied {} user anchor(s) for per-segment offset correction.",
+            config.user_anchors.len()
+        );
+    }
 
     let confirmed = resolved
         .iter()

@@ -379,6 +379,12 @@ pub enum Commands {
         #[arg(long, default_value_t = 5)]
         seed_tolerance: u32,
 
+        /// Offset search range (±N) used when auto-detecting the physical page
+        /// offset from seed titles.  Must be ≥ the actual front-matter page
+        /// count.  The default covers books with up to 50 pages of front matter.
+        #[arg(long, default_value_t = 50)]
+        offset_tolerance: u32,
+
         /// First TOC page (1-based).  Alternative to `--toc-pages` range string.
         #[arg(long)]
         toc_start_page: Option<u32>,
@@ -386,6 +392,30 @@ pub enum Commands {
         /// Last TOC page (1-based).  Alternative to `--toc-pages` range string.
         #[arg(long)]
         toc_end_page: Option<u32>,
+
+        /// Physical PDF page number (1-based) where the book's printed page 1 begins.
+        ///
+        /// Example: if your PDF reader shows page 21 when the book text says "page 1",
+        /// pass `--page-one 21`.  Bypasses the automatic seed-offset vote and applies
+        /// the given value directly (confidence 1.0).
+        ///
+        /// Non-constant drift caused by inserted blank pages is absorbed by the
+        /// per-chapter `±seed-tolerance` search that runs for every seed entry.
+        /// Increase `--seed-tolerance` (default 5) if chapters can shift by more
+        /// than ±5 physical pages relative to the base offset.
+        #[arg(long, value_name = "PDF_PAGE")]
+        page_one: Option<u32>,
+
+        /// Per-segment page pivot in the form LOGICAL:PHYSICAL (both 1-based).
+        ///
+        /// Supply once per discontinuity.  Example: `--anchor 462:477` means
+        /// "book page 462 is at physical PDF page 477".  Estimated seeds at or
+        /// after that logical page will use the resulting local offset instead of
+        /// the base offset, correcting drift caused by missing or extra scanned
+        /// pages in a specific region of the book.  Multiple anchors can be
+        /// combined to handle several discontinuities.
+        #[arg(long, value_name = "LOGICAL:PHYSICAL", value_parser = crate::cli::commands::parse_anchor_pair)]
+        anchor: Vec<(u32, u32)>,
     },
 
     /// Show the outline (bookmarks) and page labels of a PDF file.
