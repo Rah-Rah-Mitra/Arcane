@@ -1,4 +1,24 @@
 //! CLI layer — clap command definitions and dispatch.
+//!
+//! # Three-tier command architecture
+//!
+//! ```text
+//! Tier 0 — Base PDF operations   arcane pdf <op>
+//!   merge, split, rotate, protect, unlock, inject-outlines, extract-pages
+//!
+//! Tier 1 — Analysis / inspection  arcane analyze <op>
+//!   probe, outline, layout, offset, sync-pages
+//!
+//! Tier 2 — Project workflows      arcane <workflow>
+//!   chunk, recover-outline, recover, recover-project, process-toc,
+//!   search, reindex, freq, tui, watch
+//!
+//! Project management              arcane <cmd>
+//!   new, list, show, add, remove, tag, untag, list-chunks
+//! ```
+//!
+//! Workflow compositions are documented in `.claude/commands/`.
+//! Module efficiency agents are defined in `.claude/agents/`.
 
 pub mod commands;
 pub mod output;
@@ -17,6 +37,8 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
+    // ── Project management ────────────────────────────────────────────────
+
     /// Create a new project.
     New {
         /// Project name (used as directory name under ~/Arcane/Library/).
@@ -69,68 +91,13 @@ pub enum Commands {
         source_type: Option<String>,
     },
 
-    /// Split textbook sources into per-chapter PDFs.
-    Chunk {
+    /// Remove a source from a project, or an entire project.
+    Remove {
         /// Project name.
         project: String,
 
-        /// Force re-chunking even if chunks already exist.
-        #[arg(long)]
-        force: bool,
-
-        /// Outline depth to use for chunking (1 = top-level only, 2+ = sub-chapters).
-        #[arg(long, default_value_t = 1)]
-        depth: u32,
-
-        /// Preview detected chapter boundaries without writing files.
-        #[arg(long)]
-        dry_run: bool,
-
-        /// Only chunk a specific source (by title). Allows per-textbook depth.
-        #[arg(long)]
+        /// Source title to remove. If omitted, removes the entire project.
         source: Option<String>,
-    },
-
-    /// Merge multiple PDF files into one.
-    Merge {
-        /// Output PDF file path.
-        output: PathBuf,
-
-        /// Input PDF files to merge (in order).
-        #[arg(required = true)]
-        inputs: Vec<PathBuf>,
-    },
-
-    /// Split a PDF into multiple files by page ranges.
-    Split {
-        /// Input PDF file.
-        input: PathBuf,
-
-        /// Output directory for split files.
-        #[arg(long, default_value = ".")]
-        output_dir: PathBuf,
-
-        /// Page ranges (e.g., "1-5" "6-10"). 1-based, inclusive.
-        #[arg(required = true)]
-        ranges: Vec<String>,
-    },
-
-    /// Rotate pages in a PDF.
-    Rotate {
-        /// Input PDF file.
-        input: PathBuf,
-
-        /// Rotation in degrees (must be multiple of 90).
-        #[arg(long, default_value_t = 90)]
-        degrees: i32,
-
-        /// Output PDF file path (defaults to overwriting input).
-        #[arg(long)]
-        output: Option<PathBuf>,
-
-        /// Specific pages to rotate (0-based). If omitted, all pages are rotated.
-        #[arg(long)]
-        pages: Vec<u32>,
     },
 
     /// Add a tag to a project.
@@ -151,54 +118,6 @@ pub enum Commands {
         tag: String,
     },
 
-    /// Search across all indexed sources.
-    Search {
-        /// Search query string.
-        query: String,
-
-        /// Maximum number of results to return.
-        #[arg(long, default_value_t = 10)]
-        limit: usize,
-
-        /// Filter results to a specific project.
-        #[arg(long)]
-        project: Option<String>,
-
-        /// Filter results to a specific source title.
-        #[arg(long)]
-        source: Option<String>,
-    },
-
-    /// Rebuild the full-text search index from all sources.
-    Reindex,
-
-    /// Generate a frequency dictionary for a project.
-    ///
-    /// Iterates over every indexed term belonging to the project and
-    /// outputs `word count` pairs sorted by descending frequency.
-    /// The file is written into the project directory by default.
-    Freq {
-        /// Project name.
-        project: String,
-
-        /// Output file path (default: freq.txt in the project directory).
-        #[arg(long)]
-        output: Option<PathBuf>,
-
-        /// Maximum number of entries to include (0 = unlimited).
-        #[arg(long, default_value_t = 0)]
-        limit: usize,
-    },
-
-    /// Launch the interactive terminal UI.
-    Tui,
-
-    /// Watch a project directory for new PDFs.
-    Watch {
-        /// Project name to watch.
-        project: String,
-    },
-
     /// List chunk files for a source in a project.
     ListChunks {
         /// Project name.
@@ -208,42 +127,131 @@ pub enum Commands {
         source: Option<String>,
     },
 
-    /// Detect layout structure and output structural anchors as JSON.
+    // ── Base PDF operations (Tier 0) ──────────────────────────────────────
+
+    /// Atomic PDF file operations: merge, split, rotate, encrypt, inject-outlines, extract-pages.
     ///
-    /// Extracts positioned text from every page, clusters font sizes, and
-    /// identifies headings, TOC entries, and page numbers by spatial analysis.
-    DetectLayout {
-        /// Path to the PDF file.
-        file: PathBuf,
-
-        /// Output as JSON (default; human-readable summary if omitted).
-        #[arg(long)]
-        json: bool,
-
-        /// Only analyse specific pages (0-based range, e.g. "0-5").
-        #[arg(long)]
-        pages: Option<String>,
+    /// These are the composable building blocks for higher-level workflows.
+    /// Each operation is lossless (no re-encoding).
+    Pdf {
+        #[command(subcommand)]
+        op: PdfCommands,
     },
 
-    /// Calculate the logical-to-physical page offset for a PDF.
+    // ── Analysis / inspection (Tier 1) ────────────────────────────────────
+
+    /// PDF analysis and inspection: probe, outline, layout, offset, sync-pages.
     ///
-    /// Determines the integer delta between printed page numbers and PDF page
-    /// indices.  For example, if the printed "page 1" starts at physical page
-    /// 19 in the PDF, the offset is +18.
-    FindOffset {
-        /// Path to the PDF file.
+    /// Use these to understand a PDF's structure before running recovery or chunking.
+    Analyze {
+        #[command(subcommand)]
+        op: AnalyzeCommands,
+    },
+
+    // ── Workflow commands (Tier 2) ────────────────────────────────────────
+
+    /// Split textbook sources into per-chapter PDFs.
+    ///
+    /// Workflow: detect_boundaries → chunk_pdf → inject_outlines (if chapter_map set).
+    /// See `.claude/commands/chunk-textbook.md` for step-by-step guidance.
+    Chunk {
+        /// Project name.
+        project: String,
+
+        /// Force re-chunking even if chunks already exist.
+        #[arg(long)]
+        force: bool,
+
+        /// Outline depth to use for chunking (1 = top-level only, 2+ = sub-chapters).
+        #[arg(long, default_value_t = 1)]
+        depth: u32,
+
+        /// Preview detected chapter boundaries without writing files.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Only chunk a specific source (by title).
+        #[arg(long)]
+        source: Option<String>,
+    },
+
+    /// Recover PDF outline bookmarks using font-size heuristics.
+    ///
+    /// Workflow: probe → layout::analyze → offset::calculate → heuristics::inject.
+    /// See `.claude/commands/recover-outline-heuristic.md` for step-by-step guidance.
+    RecoverOutline {
+        /// Path to the PDF file to analyse.
         file: PathBuf,
 
-        /// TOC page range (1-based, e.g. "3-5") to parse for page references.
+        /// Write the fixed PDF to a new path instead of overwriting the input.
+        #[arg(long)]
+        output: Option<PathBuf>,
+
+        /// Preview detected headings without modifying any file.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Font-size ratio above body text required to classify text as a heading.
+        #[arg(long, default_value_t = 1.2)]
+        min_font_ratio: f64,
+
+        /// Maximum heading depth to inject (1 = chapter-level only, 2 = chapters + sections).
+        #[arg(long, default_value_t = 2)]
+        depth: u32,
+
+        /// TOC page range (1-based, e.g. "3-5") for targeted heading extraction.
         #[arg(long)]
         toc_pages: Option<String>,
 
-        /// Output as JSON.
+        /// Skip outline injection (preview only).
+        #[arg(long)]
+        no_inject: bool,
+
+        /// Minimum fuzzy-match similarity (0.0–1.0) for heading verification.
+        #[arg(long, default_value_t = 0.6)]
+        fuzzy_threshold: f64,
+
+        /// Output the full pipeline result as JSON.
         #[arg(long)]
         json: bool,
+
+        /// Path to a reference PDF whose /Outlines provide seed chapter titles.
+        #[arg(long, value_name = "PDF", conflicts_with = "seed_file")]
+        seed_pdf: Option<PathBuf>,
+
+        /// Path to a JSON seed file with known chapter titles and page numbers.
+        #[arg(long, value_name = "JSON")]
+        seed_file: Option<PathBuf>,
+
+        /// Page-search tolerance window (±N pages) when locating seed titles.
+        #[arg(long, default_value_t = 5)]
+        seed_tolerance: u32,
+
+        /// Offset search range (±N) for auto-detecting the physical page offset.
+        #[arg(long, default_value_t = 50)]
+        offset_tolerance: u32,
+
+        /// First TOC page (1-based). Alternative to `--toc-pages` range string.
+        #[arg(long)]
+        toc_start_page: Option<u32>,
+
+        /// Last TOC page (1-based). Alternative to `--toc-pages` range string.
+        #[arg(long)]
+        toc_end_page: Option<u32>,
+
+        /// Physical PDF page number (1-based) where the book's printed page 1 begins.
+        #[arg(long, value_name = "PDF_PAGE")]
+        page_one: Option<u32>,
+
+        /// Per-segment page pivot in the form LOGICAL:PHYSICAL (both 1-based).
+        #[arg(long, value_name = "LOGICAL:PHYSICAL", value_parser = crate::cli::commands::parse_anchor_pair)]
+        anchor: Vec<(u32, u32)>,
     },
 
     /// OCR TOC pages of a PDF and output a seed JSON for outline recovery.
+    ///
+    /// Workflow: bridge::extract_pages → bridge::client::parse_toc_entries.
+    /// See `.claude/commands/recover-outline-bridge.md`.
     ProcessToc {
         /// Path to the source PDF.
         pdf: PathBuf,
@@ -261,14 +269,14 @@ pub enum Commands {
         output: Option<PathBuf>,
 
         /// Preferred injection depth for downstream outline recovery.
-        ///
-        /// Seed generation preserves all parsed depths.
         #[arg(long, default_value_t = 2)]
         depth: u32,
     },
 
-    /// Full bridge pipeline: extract TOC pages, parse entries, and recover
-    /// outline bookmarks in one command.
+    /// Full bridge pipeline: extract TOC pages, parse entries, and recover outline.
+    ///
+    /// Workflow: process-toc → recover-outline (seeded).
+    /// See `.claude/commands/recover-outline-bridge.md`.
     Recover {
         /// Path to the source PDF.
         pdf: PathBuf,
@@ -294,8 +302,10 @@ pub enum Commands {
         dry_run: bool,
     },
 
-    /// Batch outline recovery for a project's sources with empty chapter maps
-    /// and known TOC page ranges.
+    /// Batch outline recovery for a project's sources.
+    ///
+    /// Workflow: [for each source needing recovery] recover.
+    /// See `.claude/commands/recover-outline-bridge.md`.
     RecoverProject {
         /// Arcane project name to process.
         #[arg(long, default_value = "Computer-Vision")]
@@ -318,147 +328,204 @@ pub enum Commands {
         arcane_data: Option<PathBuf>,
     },
 
-    /// Recover PDF outline bookmarks using font-size heuristics.
-    ///
-    /// Useful for PDFs that have no /Outlines and no /PageLabels (e.g. LaTeX
-    /// books with stripped metadata).  Run with --dry-run first to preview
-    /// what headings are detected, then re-run without it to write the fixed PDF.
-    RecoverOutline {
-        /// Path to the PDF file to analyse.
-        file: PathBuf,
+    /// Search across all indexed sources.
+    Search {
+        /// Search query string.
+        query: String,
 
-        /// Write the fixed PDF to a new path instead of overwriting the input.
+        /// Maximum number of results to return.
+        #[arg(long, default_value_t = 10)]
+        limit: usize,
+
+        /// Filter results to a specific project.
+        #[arg(long)]
+        project: Option<String>,
+
+        /// Filter results to a specific source title.
+        #[arg(long)]
+        source: Option<String>,
+    },
+
+    /// Rebuild the full-text search index from all sources.
+    Reindex,
+
+    /// Generate a frequency dictionary for a project.
+    Freq {
+        /// Project name.
+        project: String,
+
+        /// Output file path (default: freq.txt in the project directory).
         #[arg(long)]
         output: Option<PathBuf>,
 
-        /// Preview detected headings without modifying any file.
-        #[arg(long)]
-        dry_run: bool,
-
-        /// Font-size ratio above body text required to classify text as a heading.
-        /// 1.2 means any text 20 % larger than the most common size is a heading.
-        #[arg(long, default_value_t = 1.2)]
-        min_font_ratio: f64,
-
-        /// Maximum heading depth to inject (1 = chapter-level only, 2 = chapters + sections).
-        #[arg(long, default_value_t = 2)]
-        depth: u32,
-
-        /// TOC page range (1-based, e.g. "3-5") for targeted heading extraction.
-        #[arg(long)]
-        toc_pages: Option<String>,
-
-        /// Skip outline injection (preview only, like --dry-run but still runs
-        /// the full pipeline for JSON output).
-        #[arg(long)]
-        no_inject: bool,
-
-        /// Minimum fuzzy-match similarity (0.0–1.0) for heading verification.
-        #[arg(long, default_value_t = 0.6)]
-        fuzzy_threshold: f64,
-
-        /// Output the full pipeline result as JSON.
-        #[arg(long)]
-        json: bool,
-
-        /// Path to a reference PDF whose /Outlines provide seed chapter titles.
-        /// The reference PDF must have a working outline (verify with `arcane outline`).
-        /// Mutually exclusive with --seed-file.
-        #[arg(long, value_name = "PDF", conflicts_with = "seed_file")]
-        seed_pdf: Option<PathBuf>,
-
-        /// Path to a JSON seed file with known chapter titles and page numbers.
-        /// Format: [{"title": "...", "page": N, "depth": D}, ...]
-        /// Pages are 1-based logical page numbers matching `arcane outline` display.
-        #[arg(long, value_name = "JSON")]
-        seed_file: Option<PathBuf>,
-
-        /// Page-search tolerance window (±N pages) when locating seed titles
-        /// in the target PDF.  Increase if chapters may be shifted by more than
-        /// the default.
-        #[arg(long, default_value_t = 5)]
-        seed_tolerance: u32,
-
-        /// Offset search range (±N) used when auto-detecting the physical page
-        /// offset from seed titles.  Must be ≥ the actual front-matter page
-        /// count.  The default covers books with up to 50 pages of front matter.
-        #[arg(long, default_value_t = 50)]
-        offset_tolerance: u32,
-
-        /// First TOC page (1-based).  Alternative to `--toc-pages` range string.
-        #[arg(long)]
-        toc_start_page: Option<u32>,
-
-        /// Last TOC page (1-based).  Alternative to `--toc-pages` range string.
-        #[arg(long)]
-        toc_end_page: Option<u32>,
-
-        /// Physical PDF page number (1-based) where the book's printed page 1 begins.
-        ///
-        /// Example: if your PDF reader shows page 21 when the book text says "page 1",
-        /// pass `--page-one 21`.  Bypasses the automatic seed-offset vote and applies
-        /// the given value directly (confidence 1.0).
-        ///
-        /// Non-constant drift caused by inserted blank pages is absorbed by the
-        /// per-chapter `±seed-tolerance` search that runs for every seed entry.
-        /// Increase `--seed-tolerance` (default 5) if chapters can shift by more
-        /// than ±5 physical pages relative to the base offset.
-        #[arg(long, value_name = "PDF_PAGE")]
-        page_one: Option<u32>,
-
-        /// Per-segment page pivot in the form LOGICAL:PHYSICAL (both 1-based).
-        ///
-        /// Supply once per discontinuity.  Example: `--anchor 462:477` means
-        /// "book page 462 is at physical PDF page 477".  Estimated seeds at or
-        /// after that logical page will use the resulting local offset instead of
-        /// the base offset, correcting drift caused by missing or extra scanned
-        /// pages in a specific region of the book.  Multiple anchors can be
-        /// combined to handle several discontinuities.
-        #[arg(long, value_name = "LOGICAL:PHYSICAL", value_parser = crate::cli::commands::parse_anchor_pair)]
-        anchor: Vec<(u32, u32)>,
+        /// Maximum number of entries to include (0 = unlimited).
+        #[arg(long, default_value_t = 0)]
+        limit: usize,
     },
 
-    /// Show the outline (bookmarks) and page labels of a PDF file.
-    Outline {
-        /// Path to the PDF file.
-        file: PathBuf,
+    /// Launch the interactive terminal UI.
+    Tui,
 
-        /// Maximum depth of outline entries to display.
+    /// Watch a project directory for new PDFs.
+    Watch {
+        /// Project name to watch.
+        project: String,
+    },
+
+    // ── Legacy flat commands (deprecated — use `arcane pdf` or `arcane analyze`) ──
+
+    /// [Deprecated] Use `arcane pdf merge`. Merge multiple PDF files into one.
+    #[command(hide = true)]
+    Merge {
+        output: PathBuf,
+        #[arg(required = true)]
+        inputs: Vec<PathBuf>,
+    },
+
+    /// [Deprecated] Use `arcane pdf split`. Split a PDF into multiple files by page ranges.
+    #[command(hide = true)]
+    Split {
+        input: PathBuf,
+        #[arg(long, default_value = ".")]
+        output_dir: PathBuf,
+        #[arg(required = true)]
+        ranges: Vec<String>,
+    },
+
+    /// [Deprecated] Use `arcane pdf rotate`. Rotate pages in a PDF.
+    #[command(hide = true)]
+    Rotate {
+        input: PathBuf,
+        #[arg(long, default_value_t = 90)]
+        degrees: i32,
+        #[arg(long)]
+        output: Option<PathBuf>,
+        #[arg(long)]
+        pages: Vec<u32>,
+    },
+
+    /// [Deprecated] Use `arcane pdf protect`. Encrypt a PDF with a password.
+    #[command(hide = true)]
+    Protect {
+        input: PathBuf,
+        #[arg(long)]
+        password: String,
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
+
+    /// [Deprecated] Use `arcane pdf unlock`. Decrypt a password-protected PDF.
+    #[command(hide = true)]
+    Unlock {
+        input: PathBuf,
+        #[arg(long)]
+        password: String,
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
+
+    /// [Deprecated] Use `arcane analyze probe`. Classify a PDF as text-based or scanned.
+    #[command(hide = true)]
+    Probe {
+        file: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// [Deprecated] Use `arcane analyze outline`. Show the outline of a PDF file.
+    #[command(hide = true)]
+    Outline {
+        file: PathBuf,
         #[arg(long, default_value_t = 10)]
         depth: u32,
     },
 
-    /// Remove a source from a project, or an entire project.
-    Remove {
-        /// Project name.
-        project: String,
-
-        /// Source title to remove. If omitted, removes the entire project.
-        source: Option<String>,
-    },
-
-    /// Classify a PDF as text-based or scanned (image-only).
-    ///
-    /// Inspects every page for text-showing vs image-placing operators and
-    /// reports the overall document type plus per-page breakdown.
-    Probe {
-        /// Path to the PDF file.
+    /// [Deprecated] Use `arcane analyze layout`. Detect layout structure.
+    #[command(hide = true)]
+    DetectLayout {
         file: PathBuf,
-
-        /// Output as JSON instead of a human-readable table.
         #[arg(long)]
         json: bool,
+        #[arg(long)]
+        pages: Option<String>,
+    },
+
+    /// [Deprecated] Use `arcane analyze offset`. Calculate the logical-to-physical page offset.
+    #[command(hide = true)]
+    FindOffset {
+        file: PathBuf,
+        #[arg(long)]
+        toc_pages: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// [Deprecated] Use `arcane analyze sync-pages`. RANSAC heading↔TOC offset consensus.
+    #[command(hide = true)]
+    SyncPages {
+        file: PathBuf,
+        #[arg(long)]
+        toc_pages: Option<String>,
+        #[arg(long, default_value_t = 0.6)]
+        threshold: f64,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+// ---------------------------------------------------------------------------
+// Base PDF operations subcommand enum (Tier 0)
+// ---------------------------------------------------------------------------
+
+/// Atomic, lossless PDF file operations.
+///
+/// Each sub-command wraps a single `crate::pdf` function.  Combine these in
+/// shell scripts or workflow skill files to build higher-level pipelines.
+#[derive(Subcommand)]
+pub enum PdfCommands {
+    /// Merge multiple PDF files into one (lossless).
+    Merge {
+        /// Output PDF file path.
+        output: PathBuf,
+        /// Input PDF files to merge (in order).
+        #[arg(required = true)]
+        inputs: Vec<PathBuf>,
+    },
+
+    /// Split a PDF into multiple files by page ranges.
+    Split {
+        /// Input PDF file.
+        input: PathBuf,
+        /// Output directory for split files.
+        #[arg(long, default_value = ".")]
+        output_dir: PathBuf,
+        /// Page ranges (e.g., "1-5" "6-10"). 1-based, inclusive.
+        #[arg(required = true)]
+        ranges: Vec<String>,
+    },
+
+    /// Rotate pages in a PDF (lossless).
+    Rotate {
+        /// Input PDF file.
+        input: PathBuf,
+        /// Rotation in degrees (must be multiple of 90).
+        #[arg(long, default_value_t = 90)]
+        degrees: i32,
+        /// Output PDF file path (defaults to overwriting input).
+        #[arg(long)]
+        output: Option<PathBuf>,
+        /// Specific pages to rotate (0-based). If omitted, all pages are rotated.
+        #[arg(long)]
+        pages: Vec<u32>,
     },
 
     /// Encrypt a PDF with a password.
     Protect {
         /// Input PDF file.
         input: PathBuf,
-
         /// Password for encryption.
         #[arg(long)]
         password: String,
-
         /// Output PDF file (defaults to overwriting input).
         #[arg(long)]
         output: Option<PathBuf>,
@@ -468,38 +535,125 @@ pub enum Commands {
     Unlock {
         /// Input encrypted PDF file.
         input: PathBuf,
-
         /// Password for decryption.
         #[arg(long)]
         password: String,
-
         /// Output PDF file (defaults to overwriting input).
         #[arg(long)]
         output: Option<PathBuf>,
     },
 
-
-    /// Correlate detected chapter headings with TOC entries to find the
-    /// physical-to-logical page offset.
+    /// Inject outline bookmarks from a JSON chapter-map into a PDF.
     ///
-    /// Uses RANSAC-style consensus: for every heading × TOC-entry pair
-    /// whose title similarity exceeds `--threshold`, computes the candidate
-    /// offset delta.  The most-voted delta is the consensus offset.
-    SyncPages {
+    /// JSON format: `{"18": "Chapter 1", "44": "Chapter 2"}` (0-based page → title).
+    /// This is the base operation used internally by `arcane chunk`.
+    InjectOutlines {
+        /// Input PDF file.
+        input: PathBuf,
+        /// JSON file mapping 0-based page numbers to chapter titles.
+        #[arg(long, value_name = "JSON")]
+        chapters: PathBuf,
+        /// Output PDF file (defaults to overwriting input).
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
+
+    /// Extract a contiguous page range from a PDF into a new file.
+    ///
+    /// Page numbers are 1-based physical indices.
+    /// This is the base operation used internally by `arcane process-toc` and `arcane recover`.
+    ExtractPages {
+        /// Input PDF file.
+        input: PathBuf,
+        /// First page to extract (1-based).
+        #[arg(long)]
+        start: u32,
+        /// Last page to extract (1-based, inclusive).
+        #[arg(long)]
+        end: u32,
+        /// Output PDF file.
+        output: PathBuf,
+    },
+}
+
+// ---------------------------------------------------------------------------
+// Analysis / inspection subcommand enum (Tier 1)
+// ---------------------------------------------------------------------------
+
+/// PDF structural analysis and inspection operations.
+///
+/// Use these to understand a PDF before running recovery or chunking workflows.
+#[derive(Subcommand)]
+pub enum AnalyzeCommands {
+    /// Classify a PDF as text-based, scanned (image-only), mixed, or empty.
+    ///
+    /// Wraps `pdf::probe::probe`. Run this first to confirm a PDF is text-based
+    /// before attempting outline recovery.
+    Probe {
         /// Path to the PDF file.
         file: PathBuf,
+        /// Output as JSON instead of a human-readable table.
+        #[arg(long)]
+        json: bool,
+    },
 
-        /// TOC page range (1-based, e.g. "14-20"). Auto-detected if omitted.
+    /// Show the outline (bookmarks) and page labels of a PDF file.
+    ///
+    /// Wraps `pdf::outlines::extract_chapters_with_depth` and
+    /// `pdf::page_labels::extract_chapters_from_page_labels`.
+    Outline {
+        /// Path to the PDF file.
+        file: PathBuf,
+        /// Maximum depth of outline entries to display.
+        #[arg(long, default_value_t = 10)]
+        depth: u32,
+    },
+
+    /// Detect layout structure and output structural anchors.
+    ///
+    /// Wraps `pdf::layout::analyze_layout` (4-phase typographic pipeline).
+    /// Identifies headings, TOC entries, and page numbers via font clustering.
+    Layout {
+        /// Path to the PDF file.
+        file: PathBuf,
+        /// Output as JSON (default: human-readable summary).
+        #[arg(long)]
+        json: bool,
+        /// Only analyse specific pages (0-based range, e.g. "0-5").
+        #[arg(long)]
+        pages: Option<String>,
+    },
+
+    /// Calculate the logical-to-physical page offset for a PDF.
+    ///
+    /// Wraps `pdf::offset::calculate_offset` (PageLabels → TOC matching → page numbers).
+    /// Use the result with `--page-one` in `arcane recover-outline`.
+    Offset {
+        /// Path to the PDF file.
+        file: PathBuf,
+        /// TOC page range (1-based, e.g. "3-5") for TOC-matching strategy.
         #[arg(long)]
         toc_pages: Option<String>,
-
-        /// Minimum normalised Levenshtein similarity for a heading↔TOC match.
-        #[arg(long, default_value_t = 0.6)]
-        threshold: f64,
-
         /// Output as JSON.
         #[arg(long)]
         json: bool,
     },
 
+    /// RANSAC heading↔TOC consensus offset estimation.
+    ///
+    /// Matches detected headings against TOC entries to find the consensus
+    /// physical-to-logical page offset.  Use with `--toc-pages` for best results.
+    SyncPages {
+        /// Path to the PDF file.
+        file: PathBuf,
+        /// TOC page range (1-based, e.g. "14-20"). Auto-detected if omitted.
+        #[arg(long)]
+        toc_pages: Option<String>,
+        /// Minimum normalised Levenshtein similarity for a heading↔TOC match.
+        #[arg(long, default_value_t = 0.6)]
+        threshold: f64,
+        /// Output as JSON.
+        #[arg(long)]
+        json: bool,
+    },
 }
