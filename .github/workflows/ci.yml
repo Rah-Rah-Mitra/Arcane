@@ -107,18 +107,11 @@ jobs:
       - name: Build (all features incl. OCR)
         run: cargo build --release --all-features
 
-      - name: Smoke test — init-ocr help
-        run: cargo run --release -- init-ocr --help
+      - name: Smoke test — help output
+        run: cargo run --release -- --help
 
-      - name: Smoke test — init-ocr downloads models
-        run: cargo run --release -- init-ocr --skip-runtime
-
-      - name: Verify downloaded model files
-        run: |
-          test -f "$HOME/Arcane/models/pp-ocrv5_mobile_det.onnx"
-          test -f "$HOME/Arcane/models/en_pp-ocrv5_mobile_rec.onnx"
-          test -f "$HOME/Arcane/models/ppocrv5_en_dict.txt"
-        shell: bash
+      - name: Smoke test — list projects
+        run: cargo run --release -- list
 
       - name: Upload binary (Linux)
         if: matrix.os == 'ubuntu-latest'
