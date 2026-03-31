@@ -17,7 +17,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use super::helpers::{parse_page_range, parse_toc_range_1based, resolve_arcane_data, temp_file_path};
+use super::helpers::{
+    parse_page_range, parse_toc_range_1based, resolve_arcane_data, temp_file_path,
+};
 
 // ---------------------------------------------------------------------------
 // recover-outline
@@ -56,13 +58,19 @@ pub fn cmd_recover_outline(
         (Some(ref_path), None) => {
             let entries = seed::load_seeds_from_pdf(&ref_path, depth)
                 .with_context(|| format!("failed to load seeds from {}", ref_path.display()))?;
-            println!("[arcane] Loaded {} seed entries from reference PDF.", entries.len());
+            println!(
+                "[arcane] Loaded {} seed entries from reference PDF.",
+                entries.len()
+            );
             Some(entries)
         }
         (None, Some(json_path)) => {
             let entries = seed::load_seeds_from_json(&json_path)
                 .with_context(|| format!("failed to load seed file {}", json_path.display()))?;
-            println!("[arcane] Loaded {} seed entries from JSON file.", entries.len());
+            println!(
+                "[arcane] Loaded {} seed entries from JSON file.",
+                entries.len()
+            );
             Some(entries)
         }
         (Some(_), Some(_)) => {
@@ -188,7 +196,7 @@ pub fn cmd_recover_outline(
             "\nSeed verification: {} confirmed, {} estimated, {} out-of-range",
             confirmed, estimated, out_of_range
         );
-        println!("  {:<5} {:<6} {}", "Page", "Status", "Title");
+        println!("  {:<5} {:<6} Title", "Page", "Status");
         println!("  {}", "\u{2500}".repeat(72));
         for s in seed_ver {
             let flag = match s.status {
@@ -263,7 +271,8 @@ pub fn cmd_recover(
     let entries = extract_toc_entries(&pdf, toc_pages, server, depth)?;
 
     let temp_seed = temp_file_path("bridge-seed", "json");
-    let seed_json = serde_json::to_string_pretty(&entries).context("failed to serialise seed JSON")?;
+    let seed_json =
+        serde_json::to_string_pretty(&entries).context("failed to serialise seed JSON")?;
     std::fs::write(&temp_seed, seed_json).with_context(|| {
         format!(
             "failed to write temporary seed JSON {}",

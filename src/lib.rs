@@ -3,8 +3,8 @@
 //! This crate provides the core logic for managing PDF research projects,
 //! including chunking, search indexing, and storage.
 
-pub mod cli;
 pub mod bridge;
+pub mod cli;
 pub mod error;
 pub mod models;
 pub mod pdf;

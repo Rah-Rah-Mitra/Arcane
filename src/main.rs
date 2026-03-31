@@ -20,8 +20,8 @@
 //! arcane analyze offset book.pdf --toc-pages "7-18"
 //! ```
 
-mod cli;
 mod bridge;
+mod cli;
 mod error;
 mod models;
 mod pdf;
@@ -208,7 +208,11 @@ fn main() -> anyhow::Result<()> {
             source,
         } => commands::cmd_search(&query, limit, project.as_deref(), source.as_deref()),
         Commands::Reindex => commands::cmd_reindex(),
-        Commands::Freq { project, output, limit } => commands::cmd_freq(&project, output, limit),
+        Commands::Freq {
+            project,
+            output,
+            limit,
+        } => commands::cmd_freq(&project, output, limit),
         Commands::Tui => commands::cmd_tui(),
         Commands::Watch { project } => commands::cmd_watch(&project),
 

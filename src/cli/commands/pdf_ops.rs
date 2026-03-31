@@ -142,19 +142,13 @@ pub fn cmd_inject_outlines(
 /// Page numbers are 1-based physical indices (as shown in your PDF reader).
 /// This is the same operation used internally by `arcane process-toc` and
 /// `arcane recover` to pull out TOC pages before OCR.
-pub fn cmd_extract_pages(
-    input: PathBuf,
-    start: u32,
-    end: u32,
-    output: PathBuf,
-) -> Result<()> {
-    crate::bridge::pdf::extract_pages(&input, start, end, &output)
-        .with_context(|| {
-            format!(
-                "failed to extract pages {start}-{end} from {}",
-                input.display()
-            )
-        })?;
+pub fn cmd_extract_pages(input: PathBuf, start: u32, end: u32, output: PathBuf) -> Result<()> {
+    crate::bridge::pdf::extract_pages(&input, start, end, &output).with_context(|| {
+        format!(
+            "failed to extract pages {start}-{end} from {}",
+            input.display()
+        )
+    })?;
     println!(
         "[arcane] Extracted pages {start}-{end} from {} → {}",
         input.display(),

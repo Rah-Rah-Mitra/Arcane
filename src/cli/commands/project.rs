@@ -83,10 +83,7 @@ pub fn cmd_show(name: &str) -> Result<()> {
             println!("    page_count = {page_count}");
         }
         if let Some(range) = s.contents_page_range {
-            println!(
-                "    contents_page_range = {} to {}",
-                range.start, range.end
-            );
+            println!("    contents_page_range = {} to {}", range.start, range.end);
         }
         // Count chunks if they exist
         if s.needs_chunking {
@@ -113,6 +110,7 @@ pub fn cmd_show(name: &str) -> Result<()> {
 // Source management
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 pub fn cmd_add(
     project_name: &str,
     path: PathBuf,
@@ -142,7 +140,9 @@ pub fn cmd_add(
     let contents_page_range = match (toc_start_page, toc_end_page) {
         (Some(start), Some(end)) => {
             if start == 0 || end == 0 {
-                anyhow::bail!("--toc-start-page and --toc-end-page must be 1-based and greater than 0");
+                anyhow::bail!(
+                    "--toc-start-page and --toc-end-page must be 1-based and greater than 0"
+                );
             }
             if start > end {
                 anyhow::bail!("--toc-start-page cannot be greater than --toc-end-page");

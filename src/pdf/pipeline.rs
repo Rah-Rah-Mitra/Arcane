@@ -133,7 +133,9 @@ pub fn recover_outline(
     // Phase 2: Route.
     match probe_result.document_kind {
         DocumentKind::Scanned => {
-            tracing::warn!("Scanned PDF detected — outline recovery not supported for scanned documents.");
+            tracing::warn!(
+                "Scanned PDF detected — outline recovery not supported for scanned documents."
+            );
             return Ok(RecoveryResult {
                 probe: probe_result,
                 layout: None,
@@ -260,11 +262,7 @@ pub fn recover_outline_seeded(
                             "Standard offset detection inconclusive — trying page-scan vote"
                         );
                         let scan_threshold = config.fuzzy_threshold.max(0.5);
-                        match seed::calculate_offset_by_page_scan(
-                            &seeds,
-                            doc,
-                            scan_threshold,
-                        ) {
+                        match seed::calculate_offset_by_page_scan(&seeds, doc, scan_threshold) {
                             Some((off, conf)) => {
                                 tracing::info!(
                                     "Page-scan offset vote: offset={off} confidence={:.0}%",
@@ -316,12 +314,7 @@ pub fn recover_outline_seeded(
     // Phase 3c: Apply per-segment anchor corrections to Estimated seeds.
     if !config.user_anchors.is_empty() {
         let total_pages = doc.get_pages().len() as u32;
-        seed::apply_anchor_corrections(
-            &mut resolved,
-            &seeds,
-            &config.user_anchors,
-            total_pages,
-        );
+        seed::apply_anchor_corrections(&mut resolved, &seeds, &config.user_anchors, total_pages);
         tracing::info!(
             "Applied {} user anchor(s) for per-segment offset correction.",
             config.user_anchors.len()

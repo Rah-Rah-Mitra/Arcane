@@ -38,7 +38,6 @@ pub struct Cli {
 #[derive(Subcommand)]
 pub enum Commands {
     // ── Project management ────────────────────────────────────────────────
-
     /// Create a new project.
     New {
         /// Project name (used as directory name under ~/Arcane/Library/).
@@ -128,7 +127,6 @@ pub enum Commands {
     },
 
     // ── Base PDF operations (Tier 0) ──────────────────────────────────────
-
     /// Atomic PDF file operations: merge, split, rotate, encrypt, inject-outlines, extract-pages.
     ///
     /// These are the composable building blocks for higher-level workflows.
@@ -139,7 +137,6 @@ pub enum Commands {
     },
 
     // ── Analysis / inspection (Tier 1) ────────────────────────────────────
-
     /// PDF analysis and inspection: probe, outline, layout, offset, sync-pages.
     ///
     /// Use these to understand a PDF's structure before running recovery or chunking.
@@ -149,7 +146,6 @@ pub enum Commands {
     },
 
     // ── Workflow commands (Tier 2) ────────────────────────────────────────
-
     /// Split textbook sources into per-chapter PDFs.
     ///
     /// Workflow: detect_boundaries → chunk_pdf → inject_outlines (if chapter_map set).
@@ -373,7 +369,6 @@ pub enum Commands {
     },
 
     // ── Legacy flat commands (deprecated — use `arcane pdf` or `arcane analyze`) ──
-
     /// [Deprecated] Use `arcane pdf merge`. Merge multiple PDF files into one.
     #[command(hide = true)]
     Merge {
