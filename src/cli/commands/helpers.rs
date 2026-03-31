@@ -16,8 +16,14 @@ pub fn parse_anchor_pair(s: &str) -> Result<(u32, u32), String> {
     let (l, r) = s
         .split_once(':')
         .ok_or_else(|| format!("expected LOGICAL:PHYSICAL, got {s:?}"))?;
-    let logical: u32 = l.trim().parse().map_err(|e: std::num::ParseIntError| e.to_string())?;
-    let physical: u32 = r.trim().parse().map_err(|e: std::num::ParseIntError| e.to_string())?;
+    let logical: u32 = l
+        .trim()
+        .parse()
+        .map_err(|e: std::num::ParseIntError| e.to_string())?;
+    let physical: u32 = r
+        .trim()
+        .parse()
+        .map_err(|e: std::num::ParseIntError| e.to_string())?;
     if logical == 0 || physical == 0 {
         return Err("page numbers must be >= 1".into());
     }
@@ -84,9 +90,7 @@ pub fn parse_page_ranges(range_strs: &[String]) -> Result<Vec<(u32, u32)>> {
 pub fn parse_toc_range_1based(s: &str) -> Result<(u32, u32)> {
     let parts: Vec<&str> = s.splitn(2, '-').collect();
     if parts.len() != 2 {
-        anyhow::bail!(
-            "--toc-pages must be in START-END format (for example, 7-18), got: {s:?}"
-        );
+        anyhow::bail!("--toc-pages must be in START-END format (for example, 7-18), got: {s:?}");
     }
     let start: u32 = parts[0]
         .trim()

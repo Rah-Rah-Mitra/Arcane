@@ -1,4 +1,4 @@
-use anyhow::{Context, bail};
+use anyhow::{bail, Context};
 use lopdf::Document;
 use std::path::Path;
 

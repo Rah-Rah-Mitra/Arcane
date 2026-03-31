@@ -140,8 +140,12 @@ pub fn load_seeds_from_json(path: &Path) -> Result<Vec<SeedEntry>> {
 pub fn load_seeds_from_pdf(ref_path: &Path, max_depth: u32) -> Result<Vec<SeedEntry>> {
     let doc = Document::load(ref_path)
         .with_context(|| format!("cannot open reference PDF {}", ref_path.display()))?;
-    let entries = extract_chapters_with_depth_and_level(&doc, max_depth)
-        .with_context(|| format!("reference PDF has no usable /Outlines: {}", ref_path.display()))?;
+    let entries = extract_chapters_with_depth_and_level(&doc, max_depth).with_context(|| {
+        format!(
+            "reference PDF has no usable /Outlines: {}",
+            ref_path.display()
+        )
+    })?;
     Ok(entries
         .into_iter()
         .map(|(ref_page, title, depth_level)| SeedEntry {
@@ -169,7 +173,8 @@ pub fn load_seeds_from_pdf(ref_path: &Path, max_depth: u32) -> Result<Vec<SeedEn
 ///   - Extract that page's text from the target document.
 ///   - Compute fuzzy similarity between the seed title and each line of the text.
 ///   - If the best line similarity ≥ `fuzzy_threshold`, the seed *votes* for `d`.
-/// The offset with the most votes wins.
+///
+///     The offset with the most votes wins.
 pub fn calculate_offset_from_seeds(
     seeds: &[SeedEntry],
     doc: &Document,
@@ -204,10 +209,7 @@ pub fn calculate_offset_from_seeds(
     }
 
     // Find the winning offset.
-    let (best_idx, &best_votes) = votes
-        .iter()
-        .enumerate()
-        .max_by_key(|(_, v)| *v)?;
+    let (best_idx, &best_votes) = votes.iter().enumerate().max_by_key(|(_, v)| *v)?;
 
     if best_votes < 2 {
         return None; // inconclusive
@@ -512,7 +514,11 @@ pub fn correct_estimated_by_confirmed_neighbors(
                 // Use signed distance to handle rare out-of-order ref_page cases.
                 let dist_before = (seed_ref as i64 - brp as i64).abs();
                 let dist_after = (arp as i64 - seed_ref as i64).abs();
-                if dist_before <= dist_after { boff } else { aoff }
+                if dist_before <= dist_after {
+                    boff
+                } else {
+                    aoff
+                }
             }
             (Some((_, off)), None) => off,
             (None, Some((_, off))) => off,
@@ -526,9 +532,7 @@ pub fn correct_estimated_by_confirmed_neighbors(
         }
     }
     if corrections > 0 {
-        tracing::info!(
-            "Neighbour interpolation corrected {corrections} Estimated seed(s)."
-        );
+        tracing::info!("Neighbour interpolation corrected {corrections} Estimated seed(s).");
     }
 }
 

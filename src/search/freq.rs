@@ -42,10 +42,9 @@ pub fn build_frequency_dict(index: &SearchIndex, project_name: &str) -> Result<V
         // Build the set of doc IDs that belong to this project.
         let project_index = segment_reader.inverted_index(project_field)?;
         let mut project_docs = HashSet::new();
-        if let Some(mut postings) = project_index.read_postings(
-            &project_term,
-            tantivy::schema::IndexRecordOption::Basic,
-        )? {
+        if let Some(mut postings) =
+            project_index.read_postings(&project_term, tantivy::schema::IndexRecordOption::Basic)?
+        {
             while postings.advance() != tantivy::TERMINATED {
                 project_docs.insert(postings.doc());
             }

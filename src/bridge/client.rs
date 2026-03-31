@@ -1,4 +1,4 @@
-use anyhow::{Context, bail};
+use anyhow::{bail, Context};
 use reqwest::blocking::multipart;
 use serde::Deserialize;
 use std::path::Path;

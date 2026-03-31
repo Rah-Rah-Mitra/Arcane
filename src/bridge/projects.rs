@@ -18,7 +18,7 @@ pub struct SourceMeta {
 
 impl SourceMeta {
     pub fn chapter_map_is_empty(&self) -> bool {
-        self.chapter_map.as_object().map_or(true, |m| m.is_empty())
+        self.chapter_map.as_object().is_none_or(|m| m.is_empty())
     }
 
     pub fn pdf_path(&self) -> PathBuf {
